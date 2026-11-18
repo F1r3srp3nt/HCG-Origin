@@ -81,10 +81,11 @@ final class AppModel: ObservableObject {
                                hostName: Host.current().localizedName ?? "This Mac")
         refreshLoginItemStatus()
         let engine = self.engine
-        Task { [weak self] in
-            await engine.setObserver { snap in
-                Task { @MainActor [weak self] in self?.apply(snap) }
-            }
+        let sink: @Sendable (GatewaySnapshot) -> Void = { [weak self] snap in
+            Task { @MainActor in self?.apply(snap) }
+        }
+        Task {
+            await engine.setObserver(sink)
             await engine.start()
         }
     }
