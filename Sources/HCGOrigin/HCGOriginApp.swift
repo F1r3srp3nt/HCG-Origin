@@ -11,7 +11,7 @@ struct HCGOriginApp: App {
         Window("HCG Origin", id: "main") {
             RootView()
                 .environmentObject(model)
-                .frame(minWidth: 1080, minHeight: 700)
+                .frame(minWidth: 940, minHeight: 640)
                 .preferredColorScheme(.dark)
                 .onAppear { delegate.model = model }
                 #if HCG_UI_AUTOMATION
@@ -19,6 +19,7 @@ struct HCGOriginApp: App {
                 #endif
         }
         .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1240, height: 820)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("Gateway") {

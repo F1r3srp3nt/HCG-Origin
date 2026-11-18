@@ -611,7 +611,8 @@ public actor GatewayEngine {
         state.devices[i].connectedSince = nil
         knownConnection[state.devices[i].id] = .revoked
         queueEvent("gateway.device.revocation_enforced", deviceId: state.devices[i].id, detail: reason)
-        log(.revocation, .warning, "Device access revoked", "\(state.devices[i].name): \(reason) Origin now rejects all of its requests.",
+        let sentence = reason.hasSuffix(".") ? reason : reason + "."
+        log(.revocation, .warning, "Device access revoked", "\(state.devices[i].name): \(sentence) Origin now rejects all of its requests.",
             deviceId: state.devices[i].id)
     }
 

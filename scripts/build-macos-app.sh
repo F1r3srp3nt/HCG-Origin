@@ -37,7 +37,7 @@ SWIFT_ARGS=(-c release --build-path "$ROOT/.build/$VARIANT" "${ARCH_ARGS[@]}")
 [[ "$VARIANT" == automation ]] && SWIFT_ARGS+=(-Xswiftc -DHCG_UI_AUTOMATION)
 
 echo "==> HCG Origin $VERSION ($BUILD_NUMBER) commit $COMMIT, variant $VARIANT, archs: $ARCHS"
-swift --version 2>&1 | head -1
+swift --version 2>&1 | grep -m1 "Swift version" || true
 echo "==> swift build"
 swift build "${SWIFT_ARGS[@]}" --product HCGOrigin
 swift build "${SWIFT_ARGS[@]}" --product hcg-central-devservice
@@ -92,7 +92,7 @@ HCG Origin $VERSION (build $BUILD_NUMBER)
 Source commit: $COMMIT
 Variant: $VARIANT$( [[ "$VARIANT" == automation ]] && echo " (contains UI-automation hooks; for verification only)")
 Architectures: $(lipo -archs "$APP/Contents/MacOS/HCGOrigin")
-Built: $BUILD_DATE on $(sw_vers -productName) $(sw_vers -productVersion) ($(uname -m)), $(swift --version 2>&1 | head -1)
+Built: $BUILD_DATE on $(sw_vers -productName) $(sw_vers -productVersion) ($(uname -m)), $(swift --version 2>&1 | grep -m1 'Swift version')
 Signing: ad hoc (development). Not notarized.
 Production HCG integration: not configured (no issued HCG Connect client or central API).
 INFO

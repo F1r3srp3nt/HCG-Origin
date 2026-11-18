@@ -28,6 +28,12 @@ final class UIAutomation {
             try? FileManager.default.createDirectory(at: d.appendingPathComponent(sub), withIntermediateDirectories: true)
         }
         NSApp.activate(ignoringOtherApps: true)
+        // Fit the window to the (small) CI display so screenshots are not clipped.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if let w = NSApp.windows.first(where: { $0.isVisible && $0.title == "HCG Origin" }), let screen = w.screen ?? NSScreen.main {
+                w.setFrame(screen.visibleFrame, display: true)
+            }
+        }
         write("ready.json", ["pid": "\(ProcessInfo.processInfo.processIdentifier)", "build": model.build.summary])
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
             Task { @MainActor in UIAutomation.shared.poll() }
