@@ -7,7 +7,7 @@ Date: 18 Nov 2026 · version 0.1.0
 | Where | What ran | Result |
 |---|---|---|
 | Linux container (development) and GitHub Actions `ubuntu-latest` | `swift test`: 9 protocol tests + 13 end-to-end enrollment tests over real loopback sockets (gateway engine ↔ local development service ↔ Connector test client) | PASS |
-| GitHub Actions `macos-latest` (Apple silicon) | `scripts/verify-on-mac.sh`: build release + UI-automation app, `swift test`, LaunchServices launch of the release app, full scenario driven through the real app, screenshots | **PASS** — run [44388967092](https://github.com/F1r3srp3nt/HCG-Origin/actions/runs/44388967092), commit `9d598467a3f6`, macOS 26.7.2 on Apple M1 (virtual), Xcode 26.6 / Swift 6.3.3. Every check in `build/verification/report.md` passed; 14 screenshots of the actual app |
+| GitHub Actions `macos-latest` (Apple silicon) | `scripts/verify-on-mac.sh`: build release + UI-automation app, `swift test`, LaunchServices launch of the release app, full scenario driven through the real app, screenshots | **PASS** — run [44390315988](https://github.com/F1r3srp3nt/HCG-Origin/actions/runs/44390315988), commit `bc5d0be7e9ff` (build 9; earlier pass: run 44388967092), macOS 26.7.2 on Apple M1 (virtual), Xcode 26.6 / Swift 6.3.3. all 24 checks passed ([report](screenshots/VERIFICATION-REPORT.md)); 14 [screenshots](screenshots/) of the actual app |
 | Your MacBook Pro | `scripts/verify-on-mac.sh` and the manual walk-through in SETUP-AND-VERIFY.md | **NOT RUN** — no Mac was attached to this session |
 
 Mac run details (what was exercised in the real app): release app launched through LaunchServices and
