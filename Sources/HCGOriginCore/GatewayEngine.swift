@@ -760,6 +760,11 @@ public actor GatewayEngine {
         if !settings.allowLocalNetwork && !request.remoteAddress.hasPrefix("127.") {
             return error(403, "local_network_disabled", "This gateway accepts requests from this Mac only.", nonce: nonce)
         }
+        if settings.allowLocalNetwork && !request.remoteAddress.hasPrefix("127."),
+           let url = URL(string: "http://\(request.remoteAddress)/"), !HTTPPrivate.isPrivate(url) {
+            securityLog("public-\(request.remoteAddress)", "Request from a public address refused", request.remoteAddress)
+            return error(403, "address_not_allowed", "Only devices on this Mac or the private local network may connect.", nonce: nonce)
+        }
         guard request.method == "POST" else {
             return error(405, OriginErrorCode.badRequest, "Use POST with a signed request.", nonce: nonce)
         }

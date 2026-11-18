@@ -375,6 +375,12 @@ final class EnrollmentFlowTests: XCTestCase {
         XCTAssertEqual(resp.status, 403)
         let unsigned = await h.engine.handle(HTTPRequest(method: "POST", path: OriginPath.enroll, body: Data("{}".utf8), remoteAddress: "127.0.0.1"))
         XCTAssertEqual(unsigned.status, 401)
+        // With local-network pairing on, private addresses reach verification; public ones never do.
+        await h.engine.updateSettings { $0.allowLocalNetwork = true }
+        let lan = await h.engine.handle(HTTPRequest(method: "POST", path: OriginPath.enroll, remoteAddress: "192.168.1.50"))
+        XCTAssertEqual(lan.status, 401, "a private-network peer is allowed to try (and fails authentication)")
+        let publicPeer = await h.engine.handle(HTTPRequest(method: "POST", path: OriginPath.enroll, remoteAddress: "8.8.8.8"))
+        XCTAssertEqual(publicPeer.status, 403)
     }
 
     func testCentralVerifiesDeviceSignatureIndependently() async throws {

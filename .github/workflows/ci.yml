@@ -1,8 +1,9 @@
 name: CI
 
+# Push runs report their checks on pull requests from the same branch, so there is no
+# separate pull_request trigger (it would run the macOS job twice for every commit).
 on:
   push:
-  pull_request:
   workflow_dispatch:
 
 permissions:

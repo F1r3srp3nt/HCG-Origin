@@ -90,6 +90,9 @@ public final class HTTPServer: @unchecked Sendable {
     public var maxBodyBytes = 256 * 1024
     public var maxHeaderBytes = 16 * 1024
     public var readTimeoutSeconds = 10
+    /// Connections served at the same time; further connections are closed immediately.
+    public var maxConcurrentConnections = 64
+    private var activeConnections = 0
 
     private let handler: Handler
     private var listenFD: Int32 = -1
@@ -192,9 +195,21 @@ public final class HTTPServer: @unchecked Sendable {
             var inAddr = remote.sin_addr
             inet_ntop(AF_INET, &inAddr, &buf, socklen_t(INET_ADDRSTRLEN))
             let remoteAddress = String(cString: buf)
-            let t = Thread { [weak self] in self?.serve(client: client, remoteAddress: remoteAddress) }
+            lock.lock()
+            let admitted = activeConnections < maxConcurrentConnections
+            if admitted { activeConnections += 1 }
+            lock.unlock()
+            guard admitted else { close(client); continue }
+            let t = Thread { [weak self] in
+                self?.serve(client: client, remoteAddress: remoteAddress)
+                self?.connectionFinished()
+            }
             t.start()
         }
+    }
+
+    private func connectionFinished() {
+        lock.lock(); activeConnections -= 1; lock.unlock()
     }
 
     private func serve(client: Int32, remoteAddress: String) {
