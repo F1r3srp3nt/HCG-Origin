@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>HCGOrigin</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.hakmicapitalgroup.hcgorigin</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>HCG Origin</string>
+	<key>CFBundleDisplayName</key>
+	<string>HCG Origin</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Hakmi Capital Group. Development build.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>HCG Origin accepts enrollment requests from HCG Connector devices on your local network when you turn that on in Settings.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Plain HTTP only to this Mac (the local development service). Production uses HTTPS. -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<!-- Production integration values. Intentionally EMPTY: nothing has been issued yet.
+	     Production enrollment stays unavailable until all four are set from issued values.
+	     See docs/CENTRAL-HANDOFF.md. -->
+	<key>HCGConnectIssuer</key>
+	<string></string>
+	<key>HCGConnectClientID</key>
+	<string></string>
+	<key>HCGConnectRedirectURI</key>
+	<string></string>
+	<key>HCGCentralOriginAPIBase</key>
+	<string></string>
+	<!-- Filled by scripts/build-macos-app.sh -->
+	<key>HCGSourceCommit</key>
+	<string>unknown</string>
+	<key>HCGBuildDate</key>
+	<string>unknown</string>
+</dict>
+</plist>

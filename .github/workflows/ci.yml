@@ -1,0 +1,54 @@
+name: CI
+
+# Push runs report their checks on pull requests from the same branch, so there is no
+# separate pull_request trigger (it would run the macOS job twice for every commit).
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Protocol and engine tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - run: swift --version
+      # Protocol unit tests and end-to-end enrollment tests over loopback sockets
+      # (gateway engine ↔ local development service ↔ Connector test client).
+      - run: swift test
+
+  macos:
+    name: macOS app — build, end-to-end verification, screenshots
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # build number = commit count
+      - name: Toolchain
+        run: sw_vers; uname -m; swift --version; xcode-select -p
+      # Builds the release app and a UI-automation build of the same commit, runs swift test,
+      # launches the release app through LaunchServices, then drives the real app through
+      # pairing, approval, rejection, expiry, duplicate, outage, reconnect and revocation
+      # against the LOCAL DEVELOPMENT SERVICE, capturing screenshots.
+      - run: ./scripts/verify-on-mac.sh
+      # Unsigned development build and evidence; private to the repository's Actions artifacts.
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: HCG-Origin-macOS-${{ github.sha }}
+          path: |
+            build/release/*.zip
+            build/release/BUILD-INFO.txt
+            build/automation/*.zip
+            build/verification/
+          retention-days: 14
+          if-no-files-found: warn
