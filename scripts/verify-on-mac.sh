@@ -125,8 +125,10 @@ cmd() { # cmd <action> [arg] → prints result JSON path; fails on ok=false unle
 field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$AUTO/last.json" "$1"; }
 shot() {
   cmd screenshot "$1"
-  local wn; wn=$(field windowNumber)
-  if [[ "$wn" != "-1" && -n "$wn" ]]; then screencapture -x -o -l "$wn" "$V/screenshots/$1.png" 2>/dev/null || true; fi
+  local wn rect; wn=$(field windowNumber); rect=$(field windowRect)
+  # The screen rectangle includes attached sheets (the pairing invitation); the window ID does not.
+  if [[ -n "$rect" ]]; then screencapture -x -R "$rect" "$V/screenshots/$1.png" 2>/dev/null || true
+  elif [[ "$wn" != "-1" && -n "$wn" ]]; then screencapture -x -o -l "$wn" "$V/screenshots/$1.png" 2>/dev/null || true; fi
   [[ -s "$V/screenshots/$1.png" ]] || cp "$AUTO/screenshots/$1-window.png" "$V/screenshots/$1.png" 2>/dev/null || true
 }
 wait_for() { # wait_for <field> <python-substring> <description>
@@ -227,7 +229,7 @@ cmd select overview
 shot 08-central-outage
 admin POST outage '{"enabled":false}' >/dev/null
 cmd sync
-wait_for central "reachable" "central reachable again"
+wait_for central "reachable(service" "central reachable again"
 ok "central reachable again"
 
 step "Disconnect and reconnect"

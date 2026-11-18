@@ -129,6 +129,12 @@ final class UIAutomation {
         o["activity"] = s.activity.prefix(40).map(\.title).joined(separator: "|")
         o["invitationActive"] = s.activeInvitation == nil ? "false" : "true"
         o["windowNumber"] = "\(NSApp.windows.first(where: { $0.isVisible && $0.title == "HCG Origin" })?.windowNumber ?? -1)"
+        if let w = NSApp.windows.first(where: { $0.isVisible && $0.title == "HCG Origin" }), let screen = w.screen ?? NSScreen.main {
+            // screencapture -R takes top-left-origin screen coordinates.
+            let f = w.frame
+            let top = screen.frame.maxY - f.maxY
+            o["windowRect"] = "\(Int(f.minX)),\(Int(top)),\(Int(f.width)),\(Int(f.height))"
+        }
         return o
     }
 
