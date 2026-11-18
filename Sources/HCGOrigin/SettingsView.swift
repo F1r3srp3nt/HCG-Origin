@@ -145,12 +145,13 @@ struct ConnectionPanel: View {
             FieldRow(label: "Status", value: status)
             HStack {
                 Text("Port").foregroundStyle(HCG.textDim).frame(width: 150, alignment: .leading)
-                TextField("47700", text: $port).textFieldStyle(.roundedBorder).frame(width: 90)
+                TextField("47700", text: $port).textFieldStyle(.roundedBorder).frame(width: 80)
                 Button("Apply") {
                     if let p = UInt16(port), p >= 1024 { model.update { $0.listenPort = p } }
                 }.hcgButton().disabled(UInt16(port) == nil || UInt16(port) == s.settings.listenPort)
-                Button("Restart Listener") { model.restartListener() }.hcgButton()
+                Spacer(minLength: 0)
             }
+            Button("Restart Listener") { model.restartListener() }.hcgButton()
             Toggle(isOn: Binding(get: { s.settings.allowLocalNetwork }, set: { v in model.update { $0.allowLocalNetwork = v } })) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Accept devices on the local network")

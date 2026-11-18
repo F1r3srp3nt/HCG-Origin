@@ -262,9 +262,30 @@ public actor GatewayEngine {
 
     func tokenName(_ env: String) -> String { "session-token.\(env)" }
 
+    /// Tokens are read from the secret store once per environment and cached in memory,
+    /// so periodic snapshots never touch the Keychain.
+    var tokenCache: [String: String] = [:]
+    var tokenLoaded: Set<String> = []
+
     func currentToken() -> String? {
-        guard let data = try? secrets.read(tokenName(settings.centralMode.wireEnvironment)) else { return nil }
-        return String(data: data, encoding: .utf8)
+        let env = settings.centralMode.wireEnvironment
+        if !tokenLoaded.contains(env) {
+            tokenLoaded.insert(env)
+            if let data = try? secrets.read(tokenName(env)), let t = String(data: data, encoding: .utf8) { tokenCache[env] = t }
+        }
+        return tokenCache[env]
+    }
+
+    func storeToken(_ token: String, env: String) throws {
+        try secrets.write(tokenName(env), Data(token.utf8))
+        tokenCache[env] = token
+        tokenLoaded.insert(env)
+    }
+
+    func forgetToken(env: String) {
+        try? secrets.delete(tokenName(env))
+        tokenCache[env] = nil
+        tokenLoaded.insert(env)
     }
 
     public func signInDevelopment(email: String, displayName: String) async throws {
@@ -272,7 +293,7 @@ public actor GatewayEngine {
             throw CentralError.malformed("Switch to the local development service first.")
         }
         let response = try await DevelopmentSignIn.signIn(serviceURL: url, email: email, displayName: displayName)
-        try secrets.write(tokenName(CentralMode.development.wireEnvironment), Data(response.accessToken.utf8))
+        try storeToken(response.accessToken, env: CentralMode.development.wireEnvironment)
         state.accounts[CentralMode.development.wireEnvironment] = response.account
         persist()
         log(.account, .warning, "Signed in to the local development service",
@@ -288,7 +309,7 @@ public actor GatewayEngine {
         }
         let central = makeCentral(.production, base, identity.signer)
         let account = try await central.account(token: accessToken)
-        try secrets.write(tokenName(CentralMode.production.wireEnvironment), Data(accessToken.utf8))
+        try storeToken(accessToken, env: CentralMode.production.wireEnvironment)
         state.accounts[CentralMode.production.wireEnvironment] = account
         persist()
         log(.account, .success, "Signed in with HCG Connect", account.email)
@@ -298,7 +319,7 @@ public actor GatewayEngine {
 
     public func signOut() {
         let env = settings.centralMode.wireEnvironment
-        try? secrets.delete(tokenName(env))
+        forgetToken(env: env)
         let email = state.accounts[env]?.email ?? "account"
         state.accounts[env] = nil
         cancelPairing(reason: "Signed out")
@@ -421,7 +442,7 @@ public actor GatewayEngine {
             centralStatus.lastError = e.description
             if case .unauthorized = e {
                 log(.account, .error, "Central service did not accept the sign-in", e.description + " Sign in again.")
-                try? secrets.delete(tokenName(env))
+                forgetToken(env: env)
                 state.accounts[env] = nil
                 cancelPairing(reason: "Sign-in no longer accepted")
                 persist()

@@ -240,6 +240,8 @@ struct HCGButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 14).padding(.vertical, 7)
             .foregroundStyle(prominent ? Color.black.opacity(isEnabled ? 0.9 : 0.5) : (isEnabled ? HCG.text : HCG.textFaint))
             .background(

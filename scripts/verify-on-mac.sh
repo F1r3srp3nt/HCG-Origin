@@ -39,8 +39,10 @@ cleanup() {
   [[ -n "$APP_PID" ]] && kill "$APP_PID" 2>/dev/null || true
   [[ -n "$DEV_PID" ]] && kill "$DEV_PID" 2>/dev/null || true
   pkill -f "$WORK" 2>/dev/null || true
-  for item in gateway-signing-key.p256 gateway-signing-key.secure-enclave session-token.development session-token.production; do
-    security delete-generic-password -s "$KC_SERVICE" -a "$item" >/dev/null 2>&1 || true
+  for svc in "$KC_SERVICE" "$KC_SERVICE release"; do
+    for item in gateway-signing-key.p256 gateway-signing-key.secure-enclave session-token.development session-token.production; do
+      security delete-generic-password -s "$svc" -a "$item" >/dev/null 2>&1 || true
+    done
   done
   rm -rf "$WORK"
 }
@@ -79,7 +81,8 @@ ok "release app: $(plutil -extract CFBundleShortVersionString raw "$RELEASE_APP/
 codesign --verify --strict "$RELEASE_APP" && ok "release app signature verifies (ad hoc)"
 
 step "Release app launches through LaunchServices"
-HCG_ORIGIN_DATA_DIR="$WORK/release-data" HCG_ORIGIN_KEYCHAIN_SERVICE="$KC_SERVICE" open -n "$RELEASE_APP" --env HCG_ORIGIN_DATA_DIR="$WORK/release-data" --env HCG_ORIGIN_KEYCHAIN_SERVICE="$KC_SERVICE"
+# A separate Keychain service: items one ad-hoc build creates trigger an access prompt in another build.
+open -n "$RELEASE_APP" --env HCG_ORIGIN_DATA_DIR="$WORK/release-data" --env HCG_ORIGIN_KEYCHAIN_SERVICE="$KC_SERVICE release"
 for i in $(seq 1 30); do pgrep -f "$RELEASE_APP/Contents/MacOS/HCGOrigin" >/dev/null && break; sleep 0.5; done
 pgrep -f "$RELEASE_APP/Contents/MacOS/HCGOrigin" >/dev/null || fail "release app did not start"
 sleep 4
@@ -125,7 +128,6 @@ shot() {
   local wn; wn=$(field windowNumber)
   if [[ "$wn" != "-1" && -n "$wn" ]]; then screencapture -x -o -l "$wn" "$V/screenshots/$1.png" 2>/dev/null || true; fi
   [[ -s "$V/screenshots/$1.png" ]] || cp "$AUTO/screenshots/$1-window.png" "$V/screenshots/$1.png" 2>/dev/null || true
-  cp "$AUTO/screenshots/$1-window.png" "$V/screenshots/$1-rendered.png" 2>/dev/null || true
 }
 wait_for() { # wait_for <field> <python-substring> <description>
   for i in $(seq 1 80); do cmd state; [[ "$(field "$1")" == *"$2"* ]] && return 0; sleep 0.5; done
