@@ -87,6 +87,8 @@ cleanup() {
   [[ -n "$APP_PID" ]] && kill "$APP_PID" 2>/dev/null || true
   [[ -n "$DEV_PID" ]] && kill "$DEV_PID" 2>/dev/null || true
   [[ -n "${BLOCKER_PID:-}" ]] && kill "$BLOCKER_PID" 2>/dev/null || true
+  [[ -n "${HCGDEV_PID:-}" ]] && kill "$HCGDEV_PID" 2>/dev/null || true
+  [[ -n "${HCGS_PID:-}" ]] && kill "$HCGS_PID" 2>/dev/null || true
   pkill -f -- "--verification-run $RUN_TAG" 2>/dev/null || true
   sleep 1
   for svc in "${KC_SERVICES[@]}"; do
@@ -446,8 +448,13 @@ if [[ -n "$HCG_SERVER_SRC" ]]; then
   ok "Origin connected to HCG Server's owner API on 127.0.0.1 and verified it with a real request"
   cmd serverInvitation
   [[ -s "$AUTO/server-invitation.txt" ]] || fail "no HCG Server invitation"
-  coproc HCGDEV { "$WORK/hcgs-device" --fixture "$WORK/hcgs.json"; }
-  echo "pair $(cat "$AUTO/server-invitation.txt") hcg.sentinel MacBook_test_device" >&"${HCGDEV[1]}"; read -r PAIR <&"${HCGDEV[0]}"
+  # Talk to the test device over two FIFOs (works with macOS's bash 3.2, which has no coproc).
+  mkfifo "$WORK/hcgdev.in" "$WORK/hcgdev.out"
+  "$WORK/hcgs-device" --fixture "$WORK/hcgs.json" < "$WORK/hcgdev.in" > "$WORK/hcgdev.out" 2>"$V/logs/hcg-server-testdevice.log" &
+  HCGDEV_PID=$!
+  exec 7>"$WORK/hcgdev.in" 8<"$WORK/hcgdev.out"
+  dev() { echo "$*" >&7; local line; IFS= read -r -t 30 line <&8 || fail "HCG Server test device did not answer '$1'"; echo "$line"; }
+  PAIR=$(dev pair "$(cat "$AUTO/server-invitation.txt")" hcg.sentinel MacBook_test_device)
   echo "$PAIR" | grep -q '"ok":true' || fail "Device Link pairing request failed: $PAIR"
   ok "a Device Link test device requested pairing (HCG Server verified its signature, mock HCG token and mock ERP permission)"
   cmd serverSync
@@ -456,21 +463,22 @@ if [[ -n "$HCG_SERVER_SRC" ]]; then
   cmd select requests
   shot 14-hcg-server-request
   cmd approveFirstServerPairing
-  echo status >&"${HCGDEV[1]}"; read -r ST <&"${HCGDEV[0]}"
+  ST=$(dev status)
   echo "$ST" | grep -q '"approved"' || fail "device not approved: $ST"
-  echo heartbeat >&"${HCGDEV[1]}"; read -r HB <&"${HCGDEV[0]}"
+  HB=$(dev heartbeat)
+  echo "$HB" | grep -q '"ok":true' || fail "approved device's heartbeat failed: $HB"
   cmd serverSync
   wait_for serverDevices "=online" "Device Link device online"
   ok "owner approved in Origin (fingerprint confirmed, attributed to the signed-in owner); the device is online"
   cmd select devices
   shot 15-hcg-server-devices
-  echo action >&"${HCGDEV[1]}"; read -r ACT <&"${HCGDEV[0]}"
+  ACT=$(dev action)
   echo "$ACT" | grep -q "action_execution_disabled" && ok "remote action refused by HCG Server (execution disabled)" || fail "action not refused: $ACT"
   cmd revokeFirstServerDevice
-  echo heartbeat >&"${HCGDEV[1]}"; read -r HB2 <&"${HCGDEV[0]}"
+  HB2=$(dev heartbeat)
   echo "$HB2" | grep -q "device_revoked" && ok "revoked from Origin; the device's next request is refused (device_revoked)" || fail "revocation not enforced: $HB2"
-  echo quit >&"${HCGDEV[1]}"
-  kill "$HCGS_PID" 2>/dev/null || true
+  echo quit >&7; exec 7>&- 8<&-
+  kill "$HCGS_PID" 2>/dev/null || true; HCGS_PID=""; HCGDEV_PID=""
 fi
 
 step "Background operation setting"
