@@ -2,7 +2,7 @@ import Foundation
 import HCGOriginProtocol
 
 public enum OriginVersion {
-    public static let marketing = "0.2.0"
+    public static let marketing = "0.3.0"
 }
 
 /// Which central service Origin talks to.

@@ -151,6 +151,9 @@ final class HCGServerIntegrationTests: XCTestCase {
         try Proc(ProcessInfo.processInfo.environment["HCG_DEVICELINK_TESTDEVICE_BIN"]!, ["--fixture", fixture.path])
     }
 
+    /// Prints a readable transcript line (no tokens, codes or keys) for the verification record.
+    func note(_ line: String) { print("[evidence] \(line)") }
+
     // swiftlint:disable:next function_body_length
     func testOwnerReviewApproveInventoryRevokeAgainstRealHCGServer() async throws {
         let (fx, fixtureFile) = try startFixture()
@@ -165,6 +168,7 @@ final class HCGServerIntegrationTests: XCTestCase {
         XCTAssertEqual(snap.server.device?.fingerprint, fx.fingerprint)
         XCTAssertEqual(snap.server.link?.configured, true)
         XCTAssertEqual(snap.server.link?.actionsEnabled, false, "HCG Server must have remote actions disabled")
+        note("1 connected to HCG Server owner API \(fx.adminUrl) — server fingerprint \(fx.fingerprint.prefix(16))…, link configured, remote actions disabled")
 
         // 2. Origin creates the HCG Server invitation; a device pairs with it (HCG Server verifies signature, token, ERP).
         let inv = try await h.engine.createServerInvitation(ttlSeconds: 300)
@@ -176,6 +180,7 @@ final class HCGServerIntegrationTests: XCTestCase {
         XCTAssertEqual(pair["ok"] as? Bool, true, "\(pair)")
         let requestId = try XCTUnwrap(pair["requestId"] as? String)
         let keyFP = try XCTUnwrap(pair["keyFingerprint"] as? String)
+        note("2 Origin created invitation (TTL 300 s); test device paired over pinned TLS → request \(requestId), key \(keyFP.prefix(16))…")
 
         // 3. Origin shows the request with the HCG-verified account.
         await h.engine.syncHCGServer(force: true)
@@ -183,6 +188,7 @@ final class HCGServerIntegrationTests: XCTestCase {
         let pending = try XCTUnwrap(snap.server.pendingPairings.first { $0.requestId == requestId })
         XCTAssertEqual(pending.account.email, "owner@example.test")
         XCTAssertEqual(pending.installation.app, "hcg.sentinel")
+        note("3 Origin shows the pending request: app \(pending.installation.app), account \(pending.account.email ?? "—") (verified by HCG Server)")
 
         // 4. Approval needs the fingerprint the owner compared — a wrong one approves nothing.
         do {
@@ -190,6 +196,7 @@ final class HCGServerIntegrationTests: XCTestCase {
             XCTFail("wrong fingerprint must not approve")
         } catch {}
         XCTAssertEqual(phone.send("status")["status"] as? String, "pending")
+        note("4 approval with a wrong fingerprint refused; device still pending")
 
         // 5. Approval needs the central permission — revoke the grant and it is refused.
         try h.dev.setGrant(email: "owner@dev.local", featureKey: "origin.requests.review", granted: false)
@@ -201,6 +208,7 @@ final class HCGServerIntegrationTests: XCTestCase {
         XCTAssertEqual(phone.send("status")["status"] as? String, "pending")
         try h.dev.setGrant(email: "owner@dev.local", featureKey: "origin.requests.review", granted: true)
         h.clock.advance(11)
+        note("5 grant origin.requests.review withdrawn centrally → approval refused; device still pending; grant restored")
 
         // 6. Explicit, attributable approval.
         try await h.engine.approveServerPairing(requestId: requestId, confirmedFingerprint: keyFP)
@@ -212,12 +220,14 @@ final class HCGServerIntegrationTests: XCTestCase {
         XCTAssertEqual(inst.state, "online")
         let approval = try XCTUnwrap(snap.activity.first { $0.title == "Device Link pairing approved" })
         XCTAssertTrue(approval.detail.contains("approved by owner@dev.local"), approval.detail)
+        note("6 owner approved explicitly → device approved, heartbeat ok, inventory state \(inst.state); activity: \(approval.detail)")
 
         // 7. The protocol refuses replay, tampering and actions (execution disabled) — on the real agent.
         let replay = phone.send("replay-heartbeat")
         XCTAssertEqual(replay["second"] as? String, "replayed_request")
         XCTAssertEqual(phone.send("tamper-heartbeat")["code"] as? String, "bad_signature")
         XCTAssertEqual(phone.send("action")["code"] as? String, "action_execution_disabled")
+        note("7 replayed heartbeat → replayed_request; tampered heartbeat → bad_signature; action → action_execution_disabled")
 
         // 8. Unauthorized user: another HCG account cannot join this server's boundary.
         let inv2 = try await h.engine.createServerInvitation(ttlSeconds: 300)
@@ -226,6 +236,7 @@ final class HCGServerIntegrationTests: XCTestCase {
         let refused = stranger.send("pair \(inv2.code!) hcg.terminal Stranger other")
         XCTAssertEqual(refused["ok"] as? Bool, false, "\(refused)")
         XCTAssertNotNil(refused["code"] as? String)
+        note("8 another HCG account tried to pair → refused (\(refused["code"] as? String ?? "?"))")
 
         // 9. Denial: Origin rejects a request.
         let inv3 = try await h.engine.createServerInvitation(ttlSeconds: 300)
@@ -235,6 +246,7 @@ final class HCGServerIntegrationTests: XCTestCase {
         let rid3 = try XCTUnwrap(p3["requestId"] as? String)
         try await h.engine.rejectServerPairing(requestId: rid3)
         XCTAssertEqual(tablet.send("status")["status"] as? String, "rejected")
+        note("9 owner rejected a request → device sees rejected")
 
         // 10. Network interruption: HCG Server stops answering, then recovers.
         let fixturePid = try XCTUnwrap(fixtureProc?.processIdentifier)
@@ -247,6 +259,7 @@ final class HCGServerIntegrationTests: XCTestCase {
         snap = await h.snapshot()
         guard case .reachable = snap.server.reachability else { return XCTFail("did not recover") }
         XCTAssertTrue(snap.activity.contains { $0.title == "HCG Server reachable again" })
+        note("10 HCG Server paused (SIGSTOP) → Origin shows unreachable; resumed → reachable again (logged)")
 
         // 11. Revocation from Origin is enforced by HCG Server on the device's next request.
         try await h.engine.revokeServerInstallation(installationId: inst.installationId)
@@ -254,6 +267,7 @@ final class HCGServerIntegrationTests: XCTestCase {
         await h.engine.syncHCGServer(force: true)
         snap = await h.snapshot()
         XCTAssertEqual(snap.server.installations.first { $0.installationId == inst.installationId }?.state, "revoked")
+        note("11 owner revoked the installation → device's next heartbeat → device_revoked; inventory shows revoked")
 
         // 12. Audit: events reach central with the decisions.
         await h.engine.syncNow()
@@ -262,6 +276,7 @@ final class HCGServerIntegrationTests: XCTestCase {
                   "gateway.server.pairing_rejected", "gateway.server.installation_revoked"] {
             XCTAssertTrue(types.contains(t), "missing audit event \(t)")
         }
+        note("12 audit events received centrally: \(types.filter { $0.hasPrefix("gateway.server.") }.sorted().joined(separator: ", "))")
 
         // 13. Restart: Origin reconnects with the stored connection and sees the same inventory.
         await h.engine.shutdown()
@@ -272,6 +287,7 @@ final class HCGServerIntegrationTests: XCTestCase {
         let after = await restarted.snapshot()
         guard case .reachable = after.server.reachability else { return XCTFail("not reconnected after restart") }
         XCTAssertTrue(after.server.installations.contains { $0.installationId == inst.installationId && $0.state == "revoked" })
+        note("13 Origin restarted → reconnected from stored connection; revoked installation still listed as revoked")
         await restarted.shutdown()
     }
 }

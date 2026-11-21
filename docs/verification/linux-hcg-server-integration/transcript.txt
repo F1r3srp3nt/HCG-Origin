@@ -1,0 +1,19 @@
+Test Suite 'HCGServerIntegrationTests' started at 2026-11-21 19:50:49.621
+Test Case 'HCGServerIntegrationTests.testOwnerReviewApproveInventoryRevokeAgainstRealHCGServer' started at 2026-11-21 19:50:49.621
+[evidence] 1 connected to HCG Server owner API http://127.0.0.1:46763 — server fingerprint 6b79ee15ce4a3916…, link configured, remote actions disabled
+[evidence] 2 Origin created invitation (TTL 300 s); test device paired over pinned TLS → request lpr_15f24928e81b3f4996, key 15e6880d805efd14…
+[evidence] 3 Origin shows the pending request: app hcg.sentinel, account owner@example.test (verified by HCG Server)
+[evidence] 4 approval with a wrong fingerprint refused; device still pending
+[evidence] 5 grant origin.requests.review withdrawn centrally → approval refused; device still pending; grant restored
+[evidence] 6 owner approved explicitly → device approved, heartbeat ok, inventory state online; activity: Lab iPhone (hcg.sentinel 0.0.0-test) for owner@example.test, key 15e6 880d 805e fd14 — approved by owner@dev.local on this Mac. Remote actions stay disabled.
+[evidence] 7 replayed heartbeat → replayed_request; tampered heartbeat → bad_signature; action → action_execution_disabled
+[evidence] 8 another HCG account tried to pair → refused (wrong_account)
+[evidence] 9 owner rejected a request → device sees rejected
+[evidence] 10 HCG Server paused (SIGSTOP) → Origin shows unreachable; resumed → reachable again (logged)
+[evidence] 11 owner revoked the installation → device's next heartbeat → device_revoked; inventory shows revoked
+[evidence] 12 audit events received centrally: gateway.server.connected, gateway.server.installation_revoked, gateway.server.invitation_created, gateway.server.pairing_approved, gateway.server.pairing_rejected, gateway.server.unreachable
+[evidence] 13 Origin restarted → reconnected from stored connection; revoked installation still listed as revoked
+Test Case 'HCGServerIntegrationTests.testOwnerReviewApproveInventoryRevokeAgainstRealHCGServer' passed (6.36 seconds)
+Test Suite 'HCGServerIntegrationTests' passed at 2026-11-21 19:50:55.981
+	 Executed 45 tests, with 0 failures (0 unexpected) in 8.383 (8.383) seconds
+	 Executed 45 tests, with 0 failures (0 unexpected) in 8.383 (8.383) seconds

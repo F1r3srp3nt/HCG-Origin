@@ -7,6 +7,10 @@
 #   ./scripts/verify-on-mac.sh --expect-macos 27.0.1 --expect-chip "M4 Max"
 #                                                    also record whether this is the expected machine
 #   ./scripts/verify-on-mac.sh --save-evidence       copy the report and screenshots into docs/verification/
+#   ./scripts/verify-on-mac.sh --hcg-server ~/src/HCG-Server
+#                                                    also drive HCG Server Device Link through the real app, using a
+#                                                    real HCG Server agent with MOCK identities (needs Go 1.25+ and the
+#                                                    HCG-Server branch claude/devicelink-testdevice)
 #
 # Against the REAL app and the LOCAL DEVELOPMENT SERVICE (not HCG):
 #   swift test · release + UI-automation builds of one commit · release app launched through
@@ -22,7 +26,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-SKIP_BUILD=0; SAVE=0; EXPECT_OS=""; EXPECT_CHIP=""; ALLOW_RUNNING=0
+SKIP_BUILD=0; SAVE=0; EXPECT_OS=""; EXPECT_CHIP=""; ALLOW_RUNNING=0; HCG_SERVER_SRC=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1 ;;
@@ -30,6 +34,7 @@ while [[ $# -gt 0 ]]; do
     --expect-macos) EXPECT_OS="$2"; shift ;;
     --expect-chip) EXPECT_CHIP="$2"; shift ;;
     --allow-running-origin) ALLOW_RUNNING=1 ;;
+    --hcg-server) HCG_SERVER_SRC="$2"; shift ;;
     *) echo "unknown option $1"; exit 2 ;;
   esac
   shift
@@ -424,6 +429,49 @@ cmd selectFirstDevice
 shot 10-device-revoked
 cmd select activity
 shot 11-activity
+
+if [[ -n "$HCG_SERVER_SRC" ]]; then
+  step "HCG Server Device Link through Origin (real agent, MOCK HCG identities — not HCG)"
+  command -v go >/dev/null || fail "--hcg-server needs Go 1.25+ (https://go.dev/dl/)"
+  (cd "$HCG_SERVER_SRC" && go build -o "$WORK/hcgs-fixture" ./cmd/hcg-devicelink-fixture && go build -o "$WORK/hcgs-device" ./cmd/hcg-devicelink-testdevice) \
+    > "$V/logs/hcg-server-build.log" 2>&1 || fail "could not build the HCG Server fixture/test device (see logs/hcg-server-build.log)"
+  "$WORK/hcgs-fixture" -out "$WORK/hcgs.json" -data-dir "$WORK/hcgs-agent" -invitations 1 > "$V/logs/hcg-server-fixture.log" 2>&1 &
+  HCGS_PID=$!
+  for i in $(seq 1 60); do [[ -s "$WORK/hcgs.json" ]] && break; sleep 0.5; done
+  [[ -s "$WORK/hcgs.json" ]] || fail "HCG Server fixture did not start"
+  LINK=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["adminUrl"] + "/#token=" + d["adminToken"])' "$WORK/hcgs.json")
+  ok "real HCG Server agent started (fixture; HCG identities are mock tokens, test use only)"
+  cmd connectServerLink "$LINK"
+  wait_for server "reachable" "HCG Server connection"
+  ok "Origin connected to HCG Server's owner API on 127.0.0.1 and verified it with a real request"
+  cmd serverInvitation
+  [[ -s "$AUTO/server-invitation.txt" ]] || fail "no HCG Server invitation"
+  coproc HCGDEV { "$WORK/hcgs-device" --fixture "$WORK/hcgs.json"; }
+  echo "pair $(cat "$AUTO/server-invitation.txt") hcg.sentinel MacBook_test_device" >&"${HCGDEV[1]}"; read -r PAIR <&"${HCGDEV[0]}"
+  echo "$PAIR" | grep -q '"ok":true' || fail "Device Link pairing request failed: $PAIR"
+  ok "a Device Link test device requested pairing (HCG Server verified its signature, mock HCG token and mock ERP permission)"
+  cmd serverSync
+  wait_for serverPending "MacBook test device" "pending Device Link request in Origin"
+  cmd showServer
+  cmd select requests
+  shot 14-hcg-server-request
+  cmd approveFirstServerPairing
+  echo status >&"${HCGDEV[1]}"; read -r ST <&"${HCGDEV[0]}"
+  echo "$ST" | grep -q '"approved"' || fail "device not approved: $ST"
+  echo heartbeat >&"${HCGDEV[1]}"; read -r HB <&"${HCGDEV[0]}"
+  cmd serverSync
+  wait_for serverDevices "=online" "Device Link device online"
+  ok "owner approved in Origin (fingerprint confirmed, attributed to the signed-in owner); the device is online"
+  cmd select devices
+  shot 15-hcg-server-devices
+  echo action >&"${HCGDEV[1]}"; read -r ACT <&"${HCGDEV[0]}"
+  echo "$ACT" | grep -q "action_execution_disabled" && ok "remote action refused by HCG Server (execution disabled)" || fail "action not refused: $ACT"
+  cmd revokeFirstServerDevice
+  echo heartbeat >&"${HCGDEV[1]}"; read -r HB2 <&"${HCGDEV[0]}"
+  echo "$HB2" | grep -q "device_revoked" && ok "revoked from Origin; the device's next request is refused (device_revoked)" || fail "revocation not enforced: $HB2"
+  echo quit >&"${HCGDEV[1]}"
+  kill "$HCGS_PID" 2>/dev/null || true
+fi
 
 step "Background operation setting"
 cmd setBackground true
