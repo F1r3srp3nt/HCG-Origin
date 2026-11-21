@@ -22,26 +22,41 @@ The build is signed ad hoc. A zip downloaded from GitHub carries the quarantine 
 refuse to open it until you allow it: right-click the app → **Open**, or
 System Settings → Privacy & Security → **Open Anyway**.
 
-## 2. Scripted end-to-end verification (recommended)
+## 2. Scripted end-to-end verification on your MacBook Pro (M4 Max, macOS 27.0.1)
+
+Quit HCG Origin first (the script refuses to run while it is open), then:
 
 ```bash
-./scripts/verify-on-mac.sh
+./scripts/verify-on-mac.sh --expect-macos 27.0.1 --expect-chip "M4 Max"
 ```
 
-It runs `swift test`, builds the release app and a UI-automation build of the same commit,
-launches the release app through LaunchServices, then drives the automation build through the
-full scenario: production unavailable → development sign-in → Start Pairing → test-client
-enrollment (execution refused) → approval → connection → rejection → expired invitation →
-duplicate enrollment → central outage → disconnect/reconnect → revocation → background setting
-→ check that no invitation secret or token reaches Origin's data folder or log.
+What it does — against the real app and the **local development service, not HCG**:
 
-It uses a temporary data folder, a separate Keychain service name (deleted afterwards) and
-ports 47811/47711, so your normal Origin data and Keychain items are untouched. It takes about
-3–4 minutes, including two deliberate waits (invitation expiry and disconnect).
-Results: `build/verification/report.md`, `build/verification/screenshots/`, `build/verification/logs/`.
+1. Records fingerprints of your normal data (`~/Library/Application Support/HCG Origin`, the test-client and
+   development-service folders) and your normal Keychain items named `HCG Origin` and `HCG Origin TLS (HCG Origin)`.
+   Only hashes and presence are recorded — never secret values.
+2. `swift test` — includes real TLS 1.3 tests that create and delete a certificate labelled `HCG Origin TEST <uuid>`.
+3. Builds the release app and a UI-automation build of the same commit; launches the release app through
+   LaunchServices on port 47712 and checks it listens with TLS 1.3.
+4. Drives the automation build on port 47711 with a development service on 47811 (not Origin's 47700 or the
+   service's 47800): production unavailable, development sign-in, TLS checks (OpenSSL TLS 1.3 handshake with the
+   pinned key, TLS 1.2 refused, cleartext refused, system trust refuses the self-signed certificate, wrong pin
+   refused before any request), pairing, approval, connection, rejection, expiry, duplicate, outage, disconnect and
+   reconnect, revocation, background setting, no secrets in logs.
+5. Removes every test Keychain item and certificate it created, checks none are left, and compares your normal data
+   and Keychain fingerprints with step 1. Any difference fails the run.
 
-macOS may ask once whether Terminal may record the screen (for `screencapture`). If you decline,
-the script still saves the app's own window renderings (`*-rendered.png`).
+Takes about 5 minutes (two deliberate waits). Results go to
+`build/verification/personal-macos-<version>-<chip>-<timestamp>/` (`build/verification/latest` points to it):
+`report.md`, `environment.json`, `screenshots/`, `logs/` (including `preservation-before.txt` / `-after.txt`).
+CI results are written under `ci-…` names and are never mixed with yours. `--expect-macos` / `--expect-chip` only
+record whether the Mac matches; a mismatch is noted in the report, not hidden.
+
+To keep the evidence in the repository: `--save-evidence` copies the report and screenshots to
+`docs/verification/personal-macos-27.0.1-apple-m4-max/` for you to review and commit.
+
+macOS may ask once whether Terminal may record the screen (for screenshots); declining only affects screenshots.
+macOS 27.0.1 has not been tested by CI (GitHub runners use macOS 26.7.2); your run is the only evidence for it.
 
 ## 3. Manual walk-through
 
@@ -74,6 +89,7 @@ pbpaste | build/tools/hcg-connector-testclient enroll --code - --name "My test d
 5. The client prints a **CHECK CODE**. Origin → Connection Requests shows the same code and the verification steps.
 6. On the approver page, compare the check code and press **Approve** (or **Reject**).
 7. The client prints the decision and the granted capabilities (`execution authorised: no`).
+   All of this travels over TLS 1.3 to the certificate pinned in the invitation; the client refuses any other key.
 
 ```bash
 build/tools/hcg-connector-testclient connect

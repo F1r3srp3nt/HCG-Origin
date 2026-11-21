@@ -71,8 +71,9 @@ DATA="$WORK/data"; AUTO="$WORK/automation"; CLIENTS="$WORK/clients"; RDATA="$WOR
 mkdir -p "$DATA" "$AUTO" "$CLIENTS" "$RDATA"
 DEV_PORT=47811; GW_PORT=47711; RELEASE_PORT=47712
 RUN_TAG="hcg-origin-verify-$STAMP-$$"
-KC_SERVICE="HCG Origin verification $STAMP"
-KC_SERVICES=("$KC_SERVICE" "$KC_SERVICE release")
+KC_SERVICE="HCG Origin verification $STAMP app"
+KC_RELEASE="HCG Origin verification $STAMP release"
+KC_SERVICES=("$KC_SERVICE" "$KC_RELEASE")
 APP_PID=""; DEV_PID=""; CLEANED=0
 
 cleanup() {
@@ -192,7 +193,7 @@ codesign --verify --strict "$RELEASE_APP" && ok "release app signature verifies 
 step "Release app launches through LaunchServices"
 printf '{"listenPort": %s, "gatewayName": "Release launch check", "allowLocalNetwork": false, "centralMode": "production", "developmentServiceURL": "http://127.0.0.1:%s/api/public/origin/v1", "invitationTTLSeconds": 300, "keepRunningInBackground": false, "heartbeatIntervalSeconds": 10, "disconnectAfterSeconds": 35, "centralSyncSeconds": 4, "requestTTLSeconds": 1800}\n' "$RELEASE_PORT" "$DEV_PORT" > "$RDATA/settings.json"
 # Own Keychain name: items one ad-hoc build creates trigger an access prompt in another build.
-open -n "$RELEASE_APP" --env HCG_ORIGIN_DATA_DIR="$RDATA" --env HCG_ORIGIN_KEYCHAIN_SERVICE="$KC_SERVICE release" --args --verification-run "$RUN_TAG"
+open -n "$RELEASE_APP" --env HCG_ORIGIN_DATA_DIR="$RDATA" --env HCG_ORIGIN_KEYCHAIN_SERVICE="$KC_RELEASE" --args --verification-run "$RUN_TAG"
 for i in $(seq 1 30); do pgrep -f -- "--verification-run $RUN_TAG" >/dev/null && break; sleep 0.5; done
 pgrep -f -- "--verification-run $RUN_TAG" >/dev/null || fail "release app did not start"
 for i in $(seq 1 30); do grep -q "Listening for Connector requests" "$RDATA/activity.jsonl" 2>/dev/null && break; sleep 0.5; done

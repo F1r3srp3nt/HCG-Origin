@@ -110,21 +110,27 @@ public struct GatewayTLSIdentity {
         return try create(label: label)
     }
 
+    /// Finds the identity whose certificate subject is exactly `label`. Keychain label queries are not relied
+    /// on for exactness: an identity is used only if its own certificate names this label.
     static func find(label: String) throws -> GatewayTLSIdentity? {
         let q: [String: Any] = [kSecClass as String: kSecClassIdentity, kSecAttrLabel as String: label,
-                                kSecReturnRef as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+                                kSecReturnRef as String: true, kSecMatchLimit as String: kSecMatchLimitAll]
         var out: CFTypeRef?
         let status = SecItemCopyMatching(q as CFDictionary, &out)
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let ref = out, CFGetTypeID(ref) == SecIdentityGetTypeID() else {
+        guard status == errSecSuccess, let refs = out as? [AnyObject] else {
             throw TransportError.keychain("lookup failed (\(message(status)))")
         }
-        let identity = ref as! SecIdentity
-        var cert: SecCertificate?
-        guard SecIdentityCopyCertificate(identity, &cert) == errSecSuccess, let cert else { return nil }
-        let der = SecCertificateCopyData(cert) as Data
-        guard let fp = fingerprint(of: cert) else { return nil }
-        return GatewayTLSIdentity(identity: identity, certificateDER: der, fingerprint: fp, label: label)
+        for ref in refs where CFGetTypeID(ref) == SecIdentityGetTypeID() {
+            let identity = ref as! SecIdentity
+            var cert: SecCertificate?
+            guard SecIdentityCopyCertificate(identity, &cert) == errSecSuccess, let cert,
+                  (SecCertificateCopySubjectSummary(cert) as String?) == label,
+                  let fp = fingerprint(of: cert) else { continue }
+            return GatewayTLSIdentity(identity: identity, certificateDER: SecCertificateCopyData(cert) as Data,
+                                      fingerprint: fp, label: label)
+        }
+        return nil
     }
 
     static func create(label: String) throws -> GatewayTLSIdentity {
