@@ -1,0 +1,10 @@
+{
+  "class": "ci",
+  "macos": "26.7.2",
+  "macos_build": "25G332",
+  "chip": "Apple M1 (Virtual)",
+  "model": "VirtualMac2,1",
+  "arch": "arm64",
+  "commit": "98b6711dded23406b5e7cd967ee0f4f01b129301",
+  "ci_run": "44933222822"
+}

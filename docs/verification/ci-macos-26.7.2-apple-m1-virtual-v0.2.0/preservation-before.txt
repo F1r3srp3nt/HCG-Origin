@@ -1,0 +1,8 @@
+HCG Origin: absent
+HCG Connector Test Client: absent
+HCG Origin Development Service: absent
+keychain HCG Origin/gateway-signing-key.p256: absent
+keychain HCG Origin/gateway-signing-key.secure-enclave: absent
+keychain HCG Origin/session-token.development: absent
+keychain HCG Origin/session-token.production: absent
+keychain TLS certificate HCG Origin TLS (HCG Origin): absent
