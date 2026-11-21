@@ -53,6 +53,13 @@ public actor GatewayEngine {
     let replay = ReplayGuard()
     var lastSecurityLog: [String: Date] = [:]
     var dataLock: GatewayLock?
+    var serverState = HCGServerSnapshot.empty
+    var lastServerSync: Date?
+    var serverSyncing = false
+    var permissionDecisions: [OriginFeature: PermissionDecision] = [:]
+    var lastPermissionRefresh: Date?
+    var permissionClient: CentralPermissionClient?
+    var permissionClientBase: URL?
     var listenerFailure: ListenerFailure?
     var selfTest: SelfTestResult?
     let dataDirectory: URL
@@ -160,7 +167,8 @@ public actor GatewayEngine {
             },
             activity: Array(activity.suffix(500).reversed()),
             startupError: startupError,
-            listenerFailure: listenerFailure, selfTest: selfTest)
+            listenerFailure: listenerFailure, selfTest: selfTest,
+            server: serverState, permissions: permissionDecisions)
     }
 
     func notify() {
@@ -461,6 +469,8 @@ public actor GatewayEngine {
         forgetToken(env: env)
         let email = state.accounts[env]?.email ?? "account"
         state.accounts[env] = nil
+        permissionClient?.clearCache()
+        permissionDecisions.removeAll()
         cancelPairing(reason: "Signed out")
         persist()
         log(.account, .info, "Signed out", "\(email) on \(env). Local tokens were removed; enrolled devices are unchanged.")
@@ -833,7 +843,9 @@ public actor GatewayEngine {
     }
 
     /// Creates a new single-use invitation. The person must explicitly start this.
-    public func startPairing() throws -> ActiveInvitation {
+    public func startPairing() async throws -> ActiveInvitation {
+        if case .unavailable(let reason) = pairingAvailability() { throw PairingError.unavailable(reason) }
+        try await require(.devicesEnroll)
         if case .unavailable(let reason) = pairingAvailability() { throw PairingError.unavailable(reason) }
         guard let identity, let address = invitationAddress, let security = transport else {
             throw PairingError.unavailable("The gateway is not listening.")
@@ -926,6 +938,8 @@ public actor GatewayEngine {
         }
         if changed { persist() }
         await syncCentral()
+        await syncHCGServer()
+        await refreshPermissionsIfDue()
         notify()
     }
 

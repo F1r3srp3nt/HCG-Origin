@@ -71,6 +71,8 @@ public struct GatewaySnapshot: Equatable, Sendable {
     public var startupError: String?
     public var listenerFailure: ListenerFailure?
     public var selfTest: SelfTestResult?
+    public var server: HCGServerSnapshot
+    public var permissions: [OriginFeature: PermissionDecision]
 
     public var environment: String { settings.centralMode.wireEnvironment }
     public var isDevelopment: Bool { settings.centralMode == .development }

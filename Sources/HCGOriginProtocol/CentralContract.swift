@@ -164,7 +164,22 @@ public enum GatewayEventType {
         "gateway.device.connected", "gateway.device.reconnected", "gateway.device.disconnected",
         "gateway.device.revocation_enforced", "gateway.device.blocked_locally", "gateway.device.unblocked_locally",
         "gateway.enrollment.expired_locally",
+        // HCG Server Device Link, managed from Origin (contract revision 3)
+        "gateway.server.connected", "gateway.server.disconnected", "gateway.server.unreachable",
+        "gateway.server.invitation_created", "gateway.server.pairing_approved", "gateway.server.pairing_rejected",
+        "gateway.server.installation_revoked",
     ]
+}
+
+/// HCG Origin's feature keys in ERP App Access (PROPOSED for product `hcg.origin`, contract revision 3).
+public enum OriginFeatureKey {
+    public static let productId = "hcg.origin"
+    public static let all: [String] = [
+        "origin.app.access", "origin.gateway.manage", "origin.devices.enroll", "origin.requests.review", "origin.devices.read",
+        "origin.gateway.diagnostics", "origin.server.connect", "origin.actions.approve", "origin.audit.read", "origin.settings.admin",
+    ]
+    /// Registered disabled; execution-related. Never granted at this milestone.
+    public static let disabled: [String] = ["origin.actions.approve"]
 }
 
 public struct CentralDeviceRecord: Codable, Equatable, Sendable {

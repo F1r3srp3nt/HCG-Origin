@@ -12,7 +12,14 @@ struct DevicesView: View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader(title: "Devices",
                           subtitle: "Devices admitted through central verification. Only real enrolled devices appear here.")
-            if s.devices.isEmpty {
+            Picker("Source", selection: $model.deviceSource) {
+                Text("HCG Connector devices").tag(0)
+                Text("HCG Server Device Link (\(s.server.installations.filter { $0.state != "revoked" }.count))").tag(1)
+            }
+            .pickerStyle(.segmented).frame(maxWidth: 520).padding(.horizontal, 28).padding(.bottom, 12)
+            if model.deviceSource == 1 {
+                ScrollView { ServerDevicesSection(s: s).padding(.horizontal, 28).padding(.bottom, 24) }
+            } else if s.devices.isEmpty {
                 EmptyState(symbol: "laptopcomputer.and.iphone", title: "No enrolled devices",
                            message: "A device appears here only after central HCG (or, in development, the local service) approves its enrollment request.")
             } else {

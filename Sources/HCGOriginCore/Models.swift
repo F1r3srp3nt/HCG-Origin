@@ -37,6 +37,8 @@ public struct OriginSettings: Codable, Equatable, Sendable {
     public var admissionMaxAgeSeconds: Int?
 
     public var admissionMaxAge: Int { admissionMaxAgeSeconds ?? 15 * 60 }
+    /// HCG Server owner API this Origin manages (loopback only). Nil when not connected.
+    public var hcgServer: HCGServerConnection?
 
     public static func defaults(hostName: String) -> OriginSettings {
         OriginSettings(gatewayName: hostName.isEmpty ? "HCG Origin" : hostName,
@@ -44,7 +46,7 @@ public struct OriginSettings: Codable, Equatable, Sendable {
                        developmentServiceURL: "http://127.0.0.1:47800/api/public/origin/v1",
                        invitationTTLSeconds: Int(InvitationCode.defaultTTL), keepRunningInBackground: false,
                        heartbeatIntervalSeconds: 10, disconnectAfterSeconds: 35, centralSyncSeconds: 4,
-                       requestTTLSeconds: 30 * 60, admissionMaxAgeSeconds: nil)
+                       requestTTLSeconds: 30 * 60, admissionMaxAgeSeconds: nil, hcgServer: nil)
     }
 
     public var clampedInvitationTTL: TimeInterval {

@@ -363,7 +363,7 @@ final class EnrollmentFlowTests: XCTestCase {
         guard case .unavailable(let reason) = snap.pairing else { return XCTFail("production pairing must be unavailable") }
         XCTAssertTrue(reason.contains("HCG Connect"))
         guard case .notConfigured(let missing) = snap.central.reachability else { return XCTFail("expected notConfigured") }
-        XCTAssertEqual(missing.count, 4)
+        XCTAssertEqual(missing.count, 5)
         do {
             _ = try await h.engine.startPairing()
             XCTFail("startPairing must throw")

@@ -89,6 +89,25 @@ final class UIAutomation {
                 let inv = try await model.engine.startPairing()
                 model.showPairing = true
                 write("invitation.txt", raw: inv.code)
+            case "connectServerLink":
+                guard let parsed = HCGServerLocator.parseAdminLink(c.arg ?? "") else { throw Failure("bad admin link") }
+                try await model.engine.connectHCGServer(adminURL: parsed.adminURL, token: parsed.token, source: "manual")
+            case "serverInvitation":
+                let inv = try await model.engine.createServerInvitation(ttlSeconds: 600)
+                model.serverInvitationCode = inv.code
+                write("server-invitation.txt", raw: inv.code ?? "")
+            case "approveFirstServerPairing":
+                await model.engine.syncHCGServer(force: true)
+                guard let p = model.snapshot?.server.pendingPairings.first else { throw Failure("no pending Device Link request") }
+                try await model.engine.approveServerPairing(requestId: p.requestId, confirmedFingerprint: p.keyFingerprint)
+            case "revokeFirstServerDevice":
+                guard let i = model.snapshot?.server.installations.first(where: { $0.state != "revoked" }) else { throw Failure("no device") }
+                try await model.engine.revokeServerInstallation(installationId: i.installationId)
+            case "showServer":
+                model.requestSource = 1
+                model.deviceSource = 1
+            case "serverSync":
+                await model.engine.syncHCGServer(force: true)
             case "selfTest":
                 await model.engine.runSelfTest()
             case "cancelPairing":
@@ -137,6 +156,9 @@ final class UIAutomation {
         o["tlsFingerprint"] = s.transport?.tlsFingerprint ?? ""
         o["listener"] = "\(s.listener)"
         o["listenerFailure"] = s.listenerFailure.map { "\($0.kind.rawValue): \($0.summary)" } ?? ""
+        o["server"] = "\(s.server.reachability)"
+        o["serverPending"] = s.server.pendingPairings.map { "\($0.installation.name)/\($0.keyFingerprint.prefix(8))" }.joined(separator: ",")
+        o["serverDevices"] = s.server.installations.map { "\($0.name)=\($0.state)" }.joined(separator: ",")
         o["selfTest"] = s.selfTest.map { $0.passed ? "passed" : "failed: \($0.detail)" } ?? ""
         o["account"] = s.account?.email ?? ""
         o["gatewayId"] = s.registration?.gatewayId ?? ""

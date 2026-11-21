@@ -16,6 +16,8 @@ struct SettingsView: View {
                         IdentityPanel(s: s)
                         ConnectionPanel(s: s)
                     }
+                    HCGServerSettingsPanel(s: s)
+                    PermissionsPanel(s: s)
                     DiagnosticsPanel(s: s)
                     BackgroundPanel(s: s)
                     AboutPanel(s: s)

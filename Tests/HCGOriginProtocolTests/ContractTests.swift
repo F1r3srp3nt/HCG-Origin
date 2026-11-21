@@ -1,7 +1,7 @@
 import XCTest
 @testable import HCGOriginProtocol
 
-/// docs/contract/hcg-origin-contract-2.json is what the Connector and main HCG teams implement.
+/// docs/contract/hcg-origin-contract-3.json is what the Connector and main HCG teams implement.
 /// This test fails if the code and that file drift apart.
 final class ContractTests: XCTestCase {
     var contract: [String: Any] = [:]
@@ -9,7 +9,7 @@ final class ContractTests: XCTestCase {
     override func setUpWithError() throws {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("docs/contract/hcg-origin-contract-2.json")
+            .appendingPathComponent("docs/contract/hcg-origin-contract-3.json")
         let data = try Data(contentsOf: url)
         contract = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
@@ -82,6 +82,10 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(Set(contract["connectorErrorCodes"] as? [String] ?? []), Set(OriginErrorCode.all))
         XCTAssertEqual(Set(contract["centralErrorCodes"] as? [String] ?? []), Set(CentralErrorCode.all))
         XCTAssertEqual(Set(contract["gatewayEventTypes"] as? [String] ?? []), Set(GatewayEventType.all))
+        let features = section("originFeatures")
+        XCTAssertEqual(features["keys"] as? [String], OriginFeatureKey.all)
+        XCTAssertEqual(features["disabled"] as? [String], OriginFeatureKey.disabled)
+        XCTAssertEqual(features["productId"] as? String, OriginFeatureKey.productId)
     }
 
     func testEngineEmitsOnlyContractEventTypes() throws {

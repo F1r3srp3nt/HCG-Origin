@@ -1,0 +1,211 @@
+{
+  "contract": "hcg-origin-contract/3",
+  "status": "Connector protocol: implemented in Origin and the development test client. Central API: PROPOSED, not implemented by main HCG. HCG Server integration: Origin manages HCG Server Device Link (hcg.devicelink/1) through HCG Server's loopback owner API; feature keys: PROPOSED for product hcg.origin (main-site docs/hcg-origin/registration-proposal.md).",
+  "documents": [
+    "docs/PROTOCOL.md",
+    "docs/CENTRAL-HANDOFF.md"
+  ],
+  "versions": {
+    "connectorProtocol": "hcg-origin/2",
+    "centralAPI": "hcg-origin-central/1",
+    "capabilityCatalogue": "hcg-origin-capabilities/1",
+    "invitationCodePrefix": "hcgo2-",
+    "invitationVersion": 2,
+    "revision": 3
+  },
+  "identity": {
+    "keyAlgorithm": "ECDSA P-256 with SHA-256 (DER signatures)",
+    "fingerprint": "lowercase hex SHA-256 of the SubjectPublicKeyInfo DER",
+    "checkCode": "first 4 bytes of SHA-256(\"hcg-origin-check-v1|\" + gatewayFingerprint + \"|\" + deviceFingerprint + \"|\" + invitationId) as big-endian UInt32 mod 1000000, shown as \"ddd ddd\""
+  },
+  "transport": {
+    "tls13Pinned": "tls13-pinned",
+    "cleartextLoopbackDevelopment": "cleartext-loopback-dev",
+    "tlsMinimumVersion": "TLS 1.3",
+    "tlsPin": "SHA-256 of the server certificate SubjectPublicKeyInfo equals the invitation field tfp; no CA validation and no fallback",
+    "channelBinding": "signed response bodies carry tlsFingerprint, which must equal the pinned value"
+  },
+  "headers": {
+    "protocolVersion": "x-hcg-protocol",
+    "keyFingerprint": "x-hcg-key-fingerprint",
+    "timestamp": "x-hcg-timestamp",
+    "nonce": "x-hcg-nonce",
+    "signature": "x-hcg-signature",
+    "invitationProof": "x-hcg-invitation-proof",
+    "requestNonce": "x-hcg-request-nonce",
+    "publicKey": "x-hcg-public-key"
+  },
+  "signing": {
+    "requestInput": "HCG-ORIGIN-REQUEST-V1\\n<METHOD>\\n<path>\\n<timestamp>\\n<nonce>\\n<signer fingerprint>\\n<hex SHA-256 of body>",
+    "responseInput": "HCG-ORIGIN-RESPONSE-V1\\n<status>\\n<request nonce>\\n<timestamp>\\n<gateway fingerprint>\\n<hex SHA-256 of body>",
+    "invitationProof": "base64url HMAC-SHA256(HKDF-SHA256(ikm=secret, salt=\"hcg-origin-invitation-proof-v1\", info=invitationId, 32), requestInput)",
+    "invitationSecretHash": "hex SHA-256(\"hcg-origin-invitation-secret-v1:\" + secret)",
+    "maxClockSkewSeconds": 120,
+    "nonceRetentionSeconds": 300
+  },
+  "timing": {
+    "invitationDefaultSeconds": 300,
+    "invitationMinimumSeconds": 60,
+    "invitationMaximumSeconds": 900,
+    "invitationFailedProofLimit": 5,
+    "requestDecisionSeconds": 1800,
+    "disconnectAfterSeconds": 35,
+    "admissionMaxAgeSeconds": 900
+  },
+  "connectorPaths": {
+    "enroll": "/origin/v1/enroll",
+    "enrollmentStatus": "/origin/v1/enrollment-status",
+    "heartbeat": "/origin/v1/heartbeat"
+  },
+  "bodyTypes": {
+    "enroll": "hcg.origin.enroll/1",
+    "enrollmentStatus": "hcg.origin.enrollment-status/1",
+    "heartbeat": "hcg.origin.heartbeat/1"
+  },
+  "centralPaths": {
+    "health": "GET health",
+    "account": "GET account",
+    "registerGateway": "POST gateways",
+    "submitEnrollment": "POST enrollments",
+    "enrollment": "GET enrollments/{enrollmentId}",
+    "gatewayDevices": "GET gateways/{gatewayId}/devices",
+    "gatewayEvents": "POST gateways/{gatewayId}/events"
+  },
+  "capabilities": {
+    "enrollable": [
+      "connection.presence",
+      "device.status.report"
+    ],
+    "neverEnrollable": [
+      "agent.execute"
+    ],
+    "executionLikeRule": "any id equal to agent.execute, starting with agent., or containing exec, command or shell is refused"
+  },
+  "states": {
+    "connectorEnrollment": [
+      "received",
+      "awaiting_decision",
+      "approved",
+      "rejected",
+      "expired",
+      "failed"
+    ],
+    "centralEnrollment": [
+      "pending_review",
+      "approved",
+      "rejected",
+      "expired"
+    ],
+    "centralDevice": [
+      "active",
+      "revoked"
+    ]
+  },
+  "connectorErrorCodes": [
+    "bad_request",
+    "unauthenticated",
+    "stale_request",
+    "replayed_request",
+    "wrong_gateway",
+    "invitation_unknown",
+    "invitation_expired",
+    "invitation_used",
+    "invitation_cancelled",
+    "invalid_invitation_proof",
+    "invalid_signature",
+    "already_enrolled",
+    "enrollment_pending",
+    "unknown_request",
+    "unknown_device",
+    "device_revoked",
+    "device_blocked_locally",
+    "capability_not_granted",
+    "not_found",
+    "pairing_unavailable",
+    "admission_unverified",
+    "local_network_disabled",
+    "address_not_allowed",
+    "environment_inactive"
+  ],
+  "centralErrorCodes": [
+    "unauthorized",
+    "account_not_permitted",
+    "gateway_not_registered",
+    "gateway_signature_invalid",
+    "device_signature_invalid",
+    "duplicate_enrollment",
+    "service_unavailable",
+    "not_found",
+    "invalid_input"
+  ],
+  "gatewayEventTypes": [
+    "gateway.device.connected",
+    "gateway.device.reconnected",
+    "gateway.device.disconnected",
+    "gateway.device.revocation_enforced",
+    "gateway.device.blocked_locally",
+    "gateway.device.unblocked_locally",
+    "gateway.enrollment.expired_locally",
+    "gateway.server.connected",
+    "gateway.server.disconnected",
+    "gateway.server.unreachable",
+    "gateway.server.invitation_created",
+    "gateway.server.pairing_approved",
+    "gateway.server.pairing_rejected",
+    "gateway.server.installation_revoked"
+  ],
+  "originFeatures": {
+    "productId": "hcg.origin",
+    "accessClass": "operational",
+    "keys": [
+      "origin.app.access",
+      "origin.gateway.manage",
+      "origin.devices.enroll",
+      "origin.requests.review",
+      "origin.devices.read",
+      "origin.gateway.diagnostics",
+      "origin.server.connect",
+      "origin.actions.approve",
+      "origin.audit.read",
+      "origin.settings.admin"
+    ],
+    "disabled": [
+      "origin.actions.approve"
+    ],
+    "check": "POST {ecosystem}/check {org_id, product_id:'hcg.origin', feature_key} with the caller's own HCG Connect token; only allowed === true allows; allow cached 60 s, denial 10 s; 401 clears the cache; anything else refuses",
+    "enforcement": {
+      "origin.devices.enroll": [
+        "start pairing",
+        "create HCG Server invitation"
+      ],
+      "origin.requests.review": [
+        "approve Device Link pairing (strict)",
+        "reject (access reduction)"
+      ],
+      "origin.server.connect": [
+        "connect HCG Server"
+      ],
+      "origin.gateway.manage": [
+        "revoke Device Link installation (access reduction)"
+      ]
+    },
+    "accessReduction": "reject/revoke/block are refused only on an explicit central denial; an outage or missing sign-in never prevents removing access",
+    "execution": "origin.actions.approve is never requested while ExecutionPolicy.enabledInThisBuild is false; no role or licence overrides it"
+  },
+  "hcgServer": {
+    "protocol": "hcg.devicelink/1",
+    "ownerAPI": "loopback HTTP with HCG Server's bearer admin token (HCG Server SECURITY.md)",
+    "routes": [
+      "GET /healthz",
+      "GET /api/v1/device",
+      "GET /api/v1/link/status",
+      "GET /api/v1/link/pairings",
+      "POST /api/v1/link/pairings/{id}/approve",
+      "POST /api/v1/link/pairings/{id}/reject",
+      "GET /api/v1/link/installations",
+      "POST /api/v1/link/installations/{id}/revoke",
+      "POST /api/v1/pairing/invitations"
+    ],
+    "approval": "signed-in owner + origin.requests.review allowed + the key fingerprint the owner compared must equal the request's"
+  }
+}

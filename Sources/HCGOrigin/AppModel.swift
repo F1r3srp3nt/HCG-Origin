@@ -148,6 +148,49 @@ final class AppModel: ObservableObject {
     func dismissRequest(_ id: String) { Task { await engine.dismissRequest(id: id) } }
     func restartListener() { Task { await engine.restartListener() } }
     func retryListener() { Task { await engine.retryListener() } }
+
+    // MARK: HCG Server (Device Link)
+
+    @Published var serverInvitationCode: String?
+    @Published var requestSource = 0
+    @Published var deviceSource = 0
+
+    func connectLocalHCGServer() {
+        run("Connect HCG Server") { [engine] in try await engine.connectLocalHCGServer() }
+    }
+
+    func connectHCGServer(link: String) {
+        guard let parsed = HCGServerLocator.parseAdminLink(link) else {
+            notice = "That is not an HCG Server admin link (expected http://127.0.0.1:<port>/#token=… from `hcg-agent admin-url`)."
+            return
+        }
+        run("Connect HCG Server") { [engine] in try await engine.connectHCGServer(adminURL: parsed.adminURL, token: parsed.token, source: "manual") }
+    }
+
+    func disconnectHCGServer() { Task { await engine.disconnectHCGServer() } }
+
+    func createServerInvitation() {
+        run("HCG Server invitation") { [engine] in
+            let inv = try await engine.createServerInvitation(ttlSeconds: 600)
+            await MainActor.run { self.serverInvitationCode = inv.code }
+        }
+    }
+
+    func approveServerPairing(_ p: LinkPairingInfo) {
+        run("Approve") { [engine] in try await engine.approveServerPairing(requestId: p.requestId, confirmedFingerprint: p.keyFingerprint) }
+    }
+
+    func rejectServerPairing(_ p: LinkPairingInfo) {
+        run("Reject") { [engine] in try await engine.rejectServerPairing(requestId: p.requestId) }
+    }
+
+    func revokeServerInstallation(_ i: LinkInstallationInfo) {
+        run("Revoke") { [engine] in try await engine.revokeServerInstallation(installationId: i.installationId) }
+    }
+
+    func refreshPermissions() {
+        Task { for f in OriginFeature.allCases { _ = await engine.checkPermission(f) } }
+    }
     func runSelfTest() { Task { await engine.runSelfTest() } }
 
     func moveToFreePort() {

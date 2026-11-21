@@ -36,6 +36,7 @@ Decisions made here are development results only: they are not HCG account verif
 <p id="msg" class="err"></p>
 <h2>Enrollment requests</h2><div id="enrollments"><p class="muted">Loading…</p></div>
 <h2>Admitted devices</h2><div id="devices"></div>
+<h2>HCG Origin feature grants (ERP App Access stand-in)</h2><div id="grants"></div>
 <h2>Gateway audit events</h2><div id="events"></div>
 <h2>Decision log</h2><div id="log"></div>
 </div>
@@ -86,6 +87,19 @@ function render(s){
     c.append(l);
     if(d.status==='active'){const b=el('button','bad','Revoke');b.onclick=async()=>{try{render(await api('POST','/dev/v1/admin/devices/'+d.deviceId+'/revoke',{reason:'Revoked on the development approver page.'}));}catch(x){$('msg').textContent=x.message;}};c.append(b);}
     dv.append(c);
+  }
+  const gr=$('grants'); gr.replaceChildren();
+  if(!s.grants.length) gr.append(el('p','muted','No development accounts yet.'));
+  for(const g of s.grants){
+    const c=el('div','card'); c.append(el('b','',g.email+' '), el('span','mono',g.accountId));
+    const row=el('div',''); row.style.marginTop='8px';
+    for(const k of s.featureKeys){
+      const l=el('label','cap'); const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=g.features.includes(k);
+      const disabled=s.disabledFeatureKeys.includes(k); cb.disabled=disabled;
+      cb.onchange=async()=>{try{render(await api('POST','/dev/v1/admin/grants',{email:g.email,featureKey:k,granted:cb.checked}));}catch(x){$('msg').textContent=x.message;}};
+      l.append(cb,document.createTextNode(k+(disabled?' (disabled — execution)':''))); row.append(l);
+    }
+    c.append(row); gr.append(c);
   }
   const ev=$('events'); ev.replaceChildren(); if(!s.events.length) ev.append(el('p','muted','None.'));
   for(const e of s.events.slice(0,30)) ev.append(el('div','mono',e.occurredAt+'  '+e.type+'  '+(e.deviceId||e.localRequestId||'')+'  '+e.detail));

@@ -16,7 +16,7 @@ public enum OriginHeader {
 /// Versions of the HCG Origin contract. Connector, Origin and central HCG must agree on all three.
 public enum HCGOriginContract {
     /// The contract revision documented in docs/PROTOCOL.md and docs/CENTRAL-HANDOFF.md.
-    public static let revision = "hcg-origin-contract/2"
+    public static let revision = "hcg-origin-contract/3"
     /// Connector ↔ Origin.
     public static let connectorProtocol = OriginProtocol.version
     /// Origin ↔ central HCG (PROPOSED; returned as `apiVersion` by `GET health`).

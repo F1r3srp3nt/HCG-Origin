@@ -54,6 +54,8 @@ public final class DevCentralService: @unchecked Sendable {
         var devices: [String: StoredDevice] = [:]
         var events: [StoredEvent] = []
         var log: [DecisionLog] = []
+        /// Development stand-in for ERP App Access operational grants: accountId → granted feature keys.
+        var featureGrants: [String: [String]] = [:]
     }
 
     public let adminToken: String
@@ -214,6 +216,52 @@ public final class DevCentralService: @unchecked Sendable {
         save()
     }
 
+    public func setGrant(email: String, featureKey: String, granted: Bool) throws {
+        lock.lock(); defer { lock.unlock() }
+        try setGrantLocked(email: email, featureKey: featureKey, granted: granted)
+    }
+
+    func setGrantLocked(email: String, featureKey: String, granted: Bool) throws {
+        guard let account = state.accounts.values.first(where: { $0.email.lowercased() == email.lowercased() }) else {
+            throw ControlError.notFound(email)
+        }
+        guard OriginFeatureKey.all.contains(featureKey) else { throw ControlError.invalid("Unknown feature \(featureKey).") }
+        if granted && OriginFeatureKey.disabled.contains(featureKey) {
+            throw ControlError.invalid("\(featureKey) is disabled (execution-related) and cannot be granted.")
+        }
+        var set = Set(state.featureGrants[account.accountId] ?? [])
+        if granted { set.insert(featureKey) } else { set.remove(featureKey) }
+        state.featureGrants[account.accountId] = set.sorted()
+        note(granted ? "grant" : "revoke-grant", account.accountId, featureKey)
+        save()
+    }
+
+    /// Development emulation of HCG's Ecosystem `POST /check`: same request and answer shape, decisions from the
+    /// development grants above. Not HCG.
+    func handleCheck(_ request: HTTPRequest) -> HTTPResponse {
+        if outage { return fail(503, CentralErrorCode.serviceUnavailable, "Simulated outage (local development service).") }
+        guard let account = authenticate(request) else { return fail(401, CentralErrorCode.unauthorized, "Missing or unknown development session token.") }
+        struct In: Decodable { var org_id: String?; var product_id: String?; var feature_key: String? }
+        guard let body = try? Wire.decoder().decode(In.self, from: request.body), let org = body.org_id, let product = body.product_id,
+              let feature = body.feature_key else {
+            return fail(400, CentralErrorCode.invalidInput, "org_id, product_id and feature_key are required.")
+        }
+        func answer(_ allowed: Bool, _ layer: String?, _ reason: String?) -> HTTPResponse {
+            struct Out: Encodable {
+                var api_version = "v1"; var org_id: String; var product_id: String; var feature_key: String
+                var allowed: Bool; var layer: String?; var reason: String?; var entitlement_source: String?; var verified_at: Date
+            }
+            return json(200, Out(org_id: org, product_id: product, feature_key: feature, allowed: allowed, layer: layer, reason: reason,
+                                 entitlement_source: allowed ? "development_grant" : nil, verified_at: clock()))
+        }
+        guard product == OriginFeatureKey.productId else { return answer(false, "availability", "product_unavailable") }
+        guard OriginFeatureKey.all.contains(feature), !OriginFeatureKey.disabled.contains(feature) else {
+            return answer(false, "availability", "feature_unavailable")
+        }
+        let granted = state.featureGrants[account.accountId]?.contains(feature) == true
+        return granted ? answer(true, nil, nil) : answer(false, "identity", "user_not_permitted")
+    }
+
     func expireLocked() {
         let now = clock()
         for (id, e) in state.enrollments where e.record.state == .pendingReview && e.expiresAt <= now {
@@ -248,6 +296,7 @@ public final class DevCentralService: @unchecked Sendable {
         if request.path.hasPrefix("/dev/v1/admin/") { return handleAdmin(request) }
         if outage { return fail(503, CentralErrorCode.serviceUnavailable, "Simulated outage (local development service).") }
         if request.path == "/dev/v1/sign-in" && request.method == "POST" { return handleSignIn(request) }
+        if request.path == "/api/public/ecosystem/v1/check" && request.method == "POST" { return handleCheck(request) }
         guard request.path.hasPrefix(Self.apiPrefix) else { return fail(404, CentralErrorCode.notFound, "Unknown path.") }
         let sub = String(request.path.dropFirst(Self.apiPrefix.count))
         expireLocked()
@@ -305,6 +354,10 @@ public final class DevCentralService: @unchecked Sendable {
                                                  displayName: body.displayName ?? body.email, verified: true,
                                                  mayOwnGateways: true, environment: "development")
         state.accounts[Self.tokenKey(token)] = account
+        if state.featureGrants[account.accountId] == nil {
+            // Development convenience: a new development account starts with every non-execution Origin feature.
+            state.featureGrants[account.accountId] = OriginFeatureKey.all.filter { !OriginFeatureKey.disabled.contains($0) }
+        }
         note("sign-in", account.accountId, account.email)
         save()
         struct Out: Encodable { var accessToken: String; var account: CentralAccount }
@@ -429,6 +482,11 @@ public final class DevCentralService: @unchecked Sendable {
         do {
             switch (request.method, parts) {
             case ("GET", ["state"]): return json(200, adminState())
+            case ("POST", ["grants"]):
+                struct G: Decodable { var email: String; var featureKey: String; var granted: Bool }
+                guard let g = try? Wire.decoder().decode(G.self, from: request.body) else { throw ControlError.invalid("email, featureKey, granted required") }
+                try setGrantLocked(email: g.email, featureKey: g.featureKey, granted: g.granted)
+                return json(200, adminState())
             case ("POST", ["outage"]):
                 guard let o = try? Wire.decoder().decode(Outage.self, from: request.body) else { throw ControlError.invalid("enabled required") }
                 outage = o.enabled
@@ -463,7 +521,9 @@ public final class DevCentralService: @unchecked Sendable {
         var service: String; var environment: String; var outage: Bool
         var enrollments: [AdminEnrollment]; var devices: [CentralDeviceRecord]; var gateways: [GatewayRegistration]
         var events: [GatewayEvent]; var log: [DecisionLog]; var capabilityCatalogue: [CapabilityInfo]
+        var grants: [AdminGrant]; var featureKeys: [String]; var disabledFeatureKeys: [String]
     }
+    struct AdminGrant: Encodable { var email: String; var accountId: String; var features: [String] }
 
     func adminState() -> AdminState {
         let accounts = Dictionary(state.accounts.values.map { ($0.accountId, $0.email) }, uniquingKeysWith: { a, _ in a })
@@ -480,7 +540,11 @@ public final class DevCentralService: @unchecked Sendable {
         return AdminState(service: Self.serviceName, environment: "development", outage: outage, enrollments: enrollments,
                           devices: state.devices.values.map(\.record).sorted { $0.deviceId < $1.deviceId },
                           gateways: state.gateways.values.map(\.registration), events: Array(state.events.suffix(100).map(\.event).reversed()),
-                          log: Array(state.log.suffix(100).reversed()), capabilityCatalogue: Capability.catalogue)
+                          log: Array(state.log.suffix(100).reversed()), capabilityCatalogue: Capability.catalogue,
+                          grants: Dictionary(state.accounts.values.map { ($0.accountId, $0) }, uniquingKeysWith: { a, _ in a }).values
+                            .sorted { $0.email < $1.email }
+                            .map { AdminGrant(email: $0.email, accountId: $0.accountId, features: state.featureGrants[$0.accountId] ?? []) },
+                          featureKeys: OriginFeatureKey.all, disabledFeatureKeys: OriginFeatureKey.disabled)
     }
 }
 

@@ -77,7 +77,7 @@ codesign --verify --strict --verbose=1 "$APP"
 [[ "$(plutil -extract CFBundleExecutable raw "$APP/Contents/Info.plist")" == HCGOrigin ]] || fail "bad CFBundleExecutable"
 echo "    archs: $(lipo -archs "$APP/Contents/MacOS/HCGOrigin")"
 echo "    version: $(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist") ($(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")), commit $(plutil -extract HCGSourceCommit raw "$APP/Contents/Info.plist")"
-for k in HCGConnectIssuer HCGConnectClientID HCGConnectRedirectURI HCGCentralOriginAPIBase; do
+for k in HCGConnectIssuer HCGConnectClientID HCGConnectRedirectURI HCGCentralOriginAPIBase HCGEcosystemAPIBase; do
   v=$(plutil -extract "$k" raw "$APP/Contents/Info.plist" 2>/dev/null || true)
   [[ -z "$v" ]] || fail "$k must be empty until issued (found '$v')"
 done

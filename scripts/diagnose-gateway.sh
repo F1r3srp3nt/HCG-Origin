@@ -115,7 +115,7 @@ log show --last 2h --info --style compact --predicate 'subsystem == "com.hakmica
 hr "8. Production configuration of the running copy (public values only)"
 for pid in $PIDS; do
   exe=$(ps -o comm= -p "$pid" 2>/dev/null); app="${exe%/Contents/MacOS/HCGOrigin}"
-  for k in HCGConnectIssuer HCGConnectClientID HCGConnectRedirectURI HCGCentralOriginAPIBase; do
+  for k in HCGConnectIssuer HCGConnectClientID HCGConnectRedirectURI HCGCentralOriginAPIBase HCGEcosystemAPIBase; do
     v=$(plutil -extract "$k" raw "$app/Contents/Info.plist" 2>/dev/null)
     printf '%-24s %s\n' "$k" "${v:-<empty — not issued>}"
   done

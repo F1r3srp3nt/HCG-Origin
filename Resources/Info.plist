@@ -39,7 +39,7 @@
 		<true/>
 	</dict>
 	<!-- Production integration values. Intentionally EMPTY: nothing has been issued yet.
-	     Production enrollment stays unavailable until all four are set from issued values.
+	     Production enrollment stays unavailable until all five are set from issued values.
 	     See docs/CENTRAL-HANDOFF.md. -->
 	<key>HCGConnectIssuer</key>
 	<string></string>
@@ -48,6 +48,8 @@
 	<key>HCGConnectRedirectURI</key>
 	<string></string>
 	<key>HCGCentralOriginAPIBase</key>
+	<string></string>
+	<key>HCGEcosystemAPIBase</key>
 	<string></string>
 	<!-- Filled by scripts/build-macos-app.sh -->
 	<key>HCGSourceCommit</key>

@@ -17,7 +17,14 @@ struct RequestsView: View {
             SectionHeader(title: "Connection Requests",
                           subtitle: "Enrollment requests from Connector clients and their verification state. An invitation is not approval.",
                           trailing: AnyView(PairingButton(s: s)))
-            if s.requests.isEmpty {
+            Picker("Source", selection: $model.requestSource) {
+                Text("HCG Connector (hcg-origin/2)").tag(0)
+                Text("HCG Server Device Link (\(s.server.pendingPairings.count) pending)").tag(1)
+            }
+            .pickerStyle(.segmented).frame(maxWidth: 560).padding(.horizontal, 28).padding(.bottom, 12)
+            if model.requestSource == 1 {
+                ScrollView { ServerRequestsSection(s: s).padding(.horizontal, 28).padding(.bottom, 24) }
+            } else if s.requests.isEmpty {
                 EmptyState(symbol: "person.badge.key",
                            title: "No requests yet",
                            message: emptyMessage)

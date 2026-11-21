@@ -26,6 +26,7 @@ struct OverviewView: View {
                         GatewayPanel(s: s)
                         CentralPanel(s: s)
                     }
+                    HCGServerPanel(s: s)
                     if case .unavailable(let reason) = s.pairing {
                         Panel("Pairing") {
                             HStack(alignment: .top, spacing: 10) {

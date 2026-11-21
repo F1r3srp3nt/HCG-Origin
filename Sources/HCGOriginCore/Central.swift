@@ -10,22 +10,27 @@ public struct ProductionConfiguration: Codable, Equatable, Sendable {
     public var hcgConnectClientID: String
     public var hcgConnectRedirectURI: String
     public var centralOriginAPIBase: String
+    /// HCG Ecosystem API base for `/check` and `/me` (e.g. the VERIFIED-LIVE https://…/api/public/ecosystem/v1).
+    public var ecosystemAPIBase: String
 
     public static let infoPlistKeys = (
         issuer: "HCGConnectIssuer", clientID: "HCGConnectClientID",
-        redirectURI: "HCGConnectRedirectURI", centralBase: "HCGCentralOriginAPIBase"
+        redirectURI: "HCGConnectRedirectURI", centralBase: "HCGCentralOriginAPIBase", ecosystemBase: "HCGEcosystemAPIBase"
     )
 
-    public init(hcgConnectIssuer: String = "", hcgConnectClientID: String = "", hcgConnectRedirectURI: String = "", centralOriginAPIBase: String = "") {
+    public init(hcgConnectIssuer: String = "", hcgConnectClientID: String = "", hcgConnectRedirectURI: String = "",
+                centralOriginAPIBase: String = "", ecosystemAPIBase: String = "") {
         self.hcgConnectIssuer = hcgConnectIssuer; self.hcgConnectClientID = hcgConnectClientID
         self.hcgConnectRedirectURI = hcgConnectRedirectURI; self.centralOriginAPIBase = centralOriginAPIBase
+        self.ecosystemAPIBase = ecosystemAPIBase
     }
 
     public static func fromInfoDictionary(_ info: [String: Any]?) -> ProductionConfiguration {
         func v(_ k: String) -> String { ((info?[k] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
         let k = infoPlistKeys
         return ProductionConfiguration(hcgConnectIssuer: v(k.issuer), hcgConnectClientID: v(k.clientID),
-                                       hcgConnectRedirectURI: v(k.redirectURI), centralOriginAPIBase: v(k.centralBase))
+                                       hcgConnectRedirectURI: v(k.redirectURI), centralOriginAPIBase: v(k.centralBase),
+                                       ecosystemAPIBase: v(k.ecosystemBase))
     }
 
     /// Human-readable list of what is missing or invalid. Empty means complete.
@@ -37,6 +42,8 @@ public struct ProductionConfiguration: Codable, Equatable, Sendable {
         else if URL(string: hcgConnectIssuer)?.scheme != "https" { p.append("HCG Connect issuer must be an https URL") }
         if centralOriginAPIBase.isEmpty { p.append("Central HCG Origin API base URL (endpoints not implemented by main HCG yet)") }
         else if URL(string: centralOriginAPIBase)?.scheme != "https" { p.append("Central HCG Origin API base must be an https URL") }
+        if ecosystemAPIBase.isEmpty { p.append("HCG Ecosystem API base for permission checks (/check)") }
+        else if URL(string: ecosystemAPIBase)?.scheme != "https" { p.append("HCG Ecosystem API base must be an https URL") }
         return p
     }
 
