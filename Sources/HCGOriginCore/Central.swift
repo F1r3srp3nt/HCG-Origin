@@ -259,8 +259,36 @@ public enum HCGConnectPKCE {
         return c.url
     }
 
+    /// Tests only: allows http://127.0.0.1 token endpoints so the refresh logic can be exercised locally.
+    nonisolated(unsafe) static var allowLoopbackHTTPForTesting = false
+
+    static func tokenURL(_ s: String) throws -> URL {
+        guard let url = URL(string: s) else { throw CentralError.malformed("bad token endpoint") }
+        if url.scheme == "https" || (allowLoopbackHTTPForTesting && HTTPClient.isLoopback(url)) { return url }
+        throw CentralError.malformed("token endpoint must be https")
+    }
+
+    /// Renews a session with its refresh token (`grant_type=refresh_token`, public client, no secret).
+    /// HCG Connect may rotate the refresh token; callers must store the returned one atomically.
+    public static func refresh(refreshToken: String, tokenEndpoint: String, clientID: String) async throws -> Tokens {
+        let url = try tokenURL(tokenEndpoint)
+        func enc(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? s }
+        let form = "grant_type=refresh_token&refresh_token=\(enc(refreshToken))&client_id=\(enc(clientID))"
+        let r: HTTPClientResponse
+        do {
+            r = try await HTTPClient(timeout: 15).send(method: "POST", url: url, headers: ["Content-Type": "application/x-www-form-urlencoded"],
+                                                       body: Data(form.utf8))
+        } catch let e as HTTPClientError {
+            throw CentralError.unreachable(e.description)
+        }
+        if r.status == 400 || r.status == 401 { throw CentralError.unauthorized("the session can no longer be renewed (HTTP \(r.status))") }
+        guard r.status == 200 else { throw CentralError.rejected(status: r.status, code: "refresh_failed", message: "") }
+        do { return try JSONDecoder().decode(Tokens.self, from: r.body) }
+        catch { throw CentralError.malformed("token response: \(error)") }
+    }
+
     public static func exchange(code: String, verifier: String, discovery: Discovery, clientID: String, redirectURI: String) async throws -> Tokens {
-        guard let url = URL(string: discovery.token_endpoint), url.scheme == "https" else { throw CentralError.malformed("token endpoint must be https") }
+        let url = try tokenURL(discovery.token_endpoint)
         func enc(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? s }
         let form = "grant_type=authorization_code&code=\(enc(code))&redirect_uri=\(enc(redirectURI))&client_id=\(enc(clientID))&code_verifier=\(enc(verifier))"
         let r = try await HTTPClient(timeout: 15).send(method: "POST", url: url,
@@ -268,5 +296,34 @@ public enum HCGConnectPKCE {
                                                       body: Data(form.utf8))
         guard r.status == 200 else { throw CentralError.unauthorized("token exchange failed (\(r.status))") }
         return try JSONDecoder().decode(Tokens.self, from: r.body)
+    }
+}
+
+/// An HCG Connect session as stored in the secret store (never logged, never in plain files).
+public struct ConnectSession: Codable, Equatable, Sendable {
+    public var accessToken: String
+    public var refreshToken: String?
+    public var expiresAt: Date?
+    public var tokenEndpoint: String?
+    public var clientID: String?
+
+    public init(accessToken: String, refreshToken: String?, expiresAt: Date?, tokenEndpoint: String?, clientID: String?) {
+        self.accessToken = accessToken; self.refreshToken = refreshToken; self.expiresAt = expiresAt
+        self.tokenEndpoint = tokenEndpoint; self.clientID = clientID
+    }
+
+    /// Renew when less than two minutes remain.
+    public func needsRenewal(now: Date) -> Bool {
+        guard let expiresAt else { return false }
+        return expiresAt.timeIntervalSince(now) < 120
+    }
+
+    public var canRenew: Bool { refreshToken != nil && tokenEndpoint != nil && clientID != nil }
+
+    static func decode(_ data: Data) -> ConnectSession? {
+        if let s = try? Wire.decoder().decode(ConnectSession.self, from: data) { return s }
+        // Development tokens and sessions from 0.1/0.2 were stored as a bare access token.
+        guard let raw = String(data: data, encoding: .utf8), !raw.isEmpty, !raw.hasPrefix("{") else { return nil }
+        return ConnectSession(accessToken: raw, refreshToken: nil, expiresAt: nil, tokenEndpoint: nil, clientID: nil)
     }
 }

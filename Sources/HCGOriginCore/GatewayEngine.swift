@@ -411,27 +411,69 @@ public actor GatewayEngine {
 
     /// Tokens are read from the secret store once per environment and cached in memory,
     /// so periodic snapshots never touch the Keychain.
-    var tokenCache: [String: String] = [:]
+    var sessionCache: [String: ConnectSession] = [:]
+    var renewing = false
     var tokenLoaded: Set<String> = []
 
-    func currentToken() -> String? {
+    func currentSession() -> ConnectSession? {
         let env = settings.centralMode.wireEnvironment
         if !tokenLoaded.contains(env) {
             tokenLoaded.insert(env)
-            if let data = try? secrets.read(tokenName(env)), let t = String(data: data, encoding: .utf8) { tokenCache[env] = t }
+            if let data = try? secrets.read(tokenName(env)), let s = ConnectSession.decode(data) { sessionCache[env] = s }
         }
-        return tokenCache[env]
+        return sessionCache[env]
     }
 
+    func currentToken() -> String? { currentSession()?.accessToken }
+
     func storeToken(_ token: String, env: String) throws {
-        try secrets.write(tokenName(env), Data(token.utf8))
-        tokenCache[env] = token
+        try storeSession(ConnectSession(accessToken: token, refreshToken: nil, expiresAt: nil, tokenEndpoint: nil, clientID: nil), env: env)
+    }
+
+    /// Writes the whole session in one secret-store item, so a rotated refresh token is never lost or split.
+    func storeSession(_ session: ConnectSession, env: String) throws {
+        try secrets.write(tokenName(env), Wire.encode(session))
+        sessionCache[env] = session
         tokenLoaded.insert(env)
+    }
+
+    /// Renews the production HCG Connect session shortly before it expires. Serialized: one renewal at a time.
+    /// A refused renewal ends the session locally (sign in again); an outage keeps the current token.
+    public func renewSessionIfNeeded(force: Bool = false) async {
+        let env = settings.centralMode.wireEnvironment
+        guard !renewing, let session = currentSession(), session.canRenew,
+              force || session.needsRenewal(now: clock()),
+              let refresh = session.refreshToken, let endpoint = session.tokenEndpoint, let client = session.clientID else { return }
+        renewing = true
+        defer { renewing = false }
+        do {
+            let t = try await HCGConnectPKCE.refresh(refreshToken: refresh, tokenEndpoint: endpoint, clientID: client)
+            let renewed = ConnectSession(accessToken: t.access_token, refreshToken: t.refresh_token ?? refresh,
+                                         expiresAt: t.expires_in.map { clock().addingTimeInterval(TimeInterval($0)) },
+                                         tokenEndpoint: endpoint, clientID: client)
+            try storeSession(renewed, env: env)
+            permissionClient?.clearCache()
+            log(.account, .info, "HCG session renewed", "Valid until \(renewed.expiresAt.map { Self.timeFormatter.string(from: $0) } ?? "unknown").")
+        } catch let e as CentralError {
+            if case .unauthorized = e {
+                forgetToken(env: env)
+                state.accounts[env] = nil
+                permissionDecisions.removeAll()
+                cancelPairing(reason: "Session ended")
+                persist()
+                log(.account, .error, "HCG session ended", "\(e.description) Sign in again. Nothing else changed.")
+            } else {
+                log(.account, .warning, "HCG session renewal postponed", e.description)
+            }
+        } catch {
+            log(.account, .warning, "HCG session renewal postponed", "\(error)")
+        }
+        notify()
     }
 
     func forgetToken(env: String) {
         try? secrets.delete(tokenName(env))
-        tokenCache[env] = nil
+        sessionCache[env] = nil
         tokenLoaded.insert(env)
     }
 
@@ -450,13 +492,16 @@ public actor GatewayEngine {
     }
 
     /// Stores tokens from a completed HCG Connect sign-in (production only).
-    public func completeProductionSignIn(accessToken: String) async throws {
+    public func completeProductionSignIn(tokens: HCGConnectPKCE.Tokens, tokenEndpoint: String) async throws {
         guard production.isComplete, let base = URL(string: production.centralOriginAPIBase), let identity else {
             throw CentralError.notConfigured(production.problems)
         }
         let central = makeCentral(.production, base, identity.signer)
-        let account = try await central.account(token: accessToken)
-        try storeToken(accessToken, env: CentralMode.production.wireEnvironment)
+        let account = try await central.account(token: tokens.access_token)
+        try storeSession(ConnectSession(accessToken: tokens.access_token, refreshToken: tokens.refresh_token,
+                                        expiresAt: tokens.expires_in.map { clock().addingTimeInterval(TimeInterval($0)) },
+                                        tokenEndpoint: tokenEndpoint, clientID: production.hcgConnectClientID),
+                         env: CentralMode.production.wireEnvironment)
         state.accounts[CentralMode.production.wireEnvironment] = account
         persist()
         log(.account, .success, "Signed in with HCG Connect", account.email)
@@ -937,6 +982,7 @@ public actor GatewayEngine {
             knownConnection[d.id] = c
         }
         if changed { persist() }
+        await renewSessionIfNeeded()
         await syncCentral()
         await syncHCGServer()
         await refreshPermissionsIfDue()

@@ -237,7 +237,7 @@ final class AppModel: ObservableObject {
             }
             let tokens = try await HCGConnectPKCE.exchange(code: code, verifier: verifier, discovery: discovery,
                                                            clientID: p.hcgConnectClientID, redirectURI: p.hcgConnectRedirectURI)
-            try await engine.completeProductionSignIn(accessToken: tokens.access_token)
+            try await engine.completeProductionSignIn(tokens: tokens, tokenEndpoint: discovery.token_endpoint)
         }
     }
 

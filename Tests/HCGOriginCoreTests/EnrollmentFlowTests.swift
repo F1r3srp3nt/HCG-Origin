@@ -403,7 +403,7 @@ final class EnrollmentFlowTests: XCTestCase {
         let reg = try XCTUnwrap(snap.registration)
         let signer = try GatewayIdentity.loadOrCreate(store: h.secrets, preferSecureEnclave: false).signer
         let central = HTTPCentralService(mode: .development, baseURL: h.dev.baseURL, signer: signer)
-        let token = try XCTUnwrap(try h.secrets.read("session-token.development").flatMap { String(data: $0, encoding: .utf8) })
+        let token = try XCTUnwrap(try h.secrets.read("session-token.development").flatMap { ConnectSession.decode($0)?.accessToken })
         record.device.name = "Renamed by gateway"
         do {
             _ = try await central.submitEnrollment(CentralEnrollmentSubmission(
