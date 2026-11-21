@@ -1,4 +1,4 @@
-# Screenshots of the actual app
+# CI evidence — HCG Origin 0.1.0 (hcg-origin/1, before encrypted transport)
 
 Captured by `scripts/verify-on-mac.sh` on GitHub Actions `macos-latest` (macOS 26.7.2, Apple M1 VM),
 run 44390315988, commit `bc5d0be7e9ff`, while the script drove the real app. `00` is the release build

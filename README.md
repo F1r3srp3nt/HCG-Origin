@@ -9,8 +9,9 @@
 requests from **HCG Connector**, forwards them to central HCG for verification and admission
 through **ERP**, and manages the connections that ERP permits.
 
-> Status: development build `0.1.0`, first milestone. One complete enrollment flow works end to end
-> against a clearly labelled **local development service**. Production enrollment is unavailable
+> Status: development build `0.2.0` (contract revision `hcg-origin-contract/2`). Connectors reach Origin over
+> **TLS 1.3 with a pinned gateway certificate**; one complete enrollment flow works end to end against a clearly
+> labelled **local development service**. Production enrollment is unavailable
 > until HCG issues Origin's HCG Connect registration and implements the central Origin API
 > (see [docs/CENTRAL-HANDOFF.md](docs/CENTRAL-HANDOFF.md)). Not notarized.
 
@@ -29,7 +30,7 @@ through **ERP**, and manages the connections that ERP permits.
 
 1. You press **Start Pairing** in Origin.
 2. Origin shows a short-lived (5 min), single-use invitation as a code and QR code.
-3. A Connector client uses it to send a signed enrollment request.
+3. A Connector client uses it to connect over TLS 1.3 (pinned to the certificate named in the invitation) and send a signed enrollment request.
 4. Origin verifies it locally (signature, invitation proof, freshness, gateway binding), shows it
    under **Connection Requests**, and forwards it to the central service.
 5. Central verifies the account and the device's own signature; the authorised person approves or rejects in ERP.
@@ -54,10 +55,11 @@ git clone https://github.com/F1r3srp3nt/HCG-Origin.git && cd HCG-Origin && git c
 open "build/release/HCG Origin.app"
 ```
 
-To run the whole verified scenario (build, tests, real app driven end to end, screenshots):
+To run the whole verified scenario on your Mac (quit HCG Origin first; your normal data and Keychain items are
+fingerprinted before and after and must be unchanged):
 
 ```bash
-./scripts/verify-on-mac.sh
+./scripts/verify-on-mac.sh --expect-macos 27.0.1 --expect-chip "M4 Max"
 ```
 
 Step-by-step manual testing with the development service and test client:
@@ -67,8 +69,9 @@ Step-by-step manual testing with the development service and test client:
 
 | Document | Contents |
 |---|---|
-| [docs/PROTOCOL.md](docs/PROTOCOL.md) | Pairing transport decision, identities, signed messages, invitation expiry, replay protection, endpoints |
-| [docs/CENTRAL-HANDOFF.md](docs/CENTRAL-HANDOFF.md) | Handoff to the main HCG project: login registration, gateway/device registration, enrollment, ownership, revocation, audit |
+| [docs/PROTOCOL.md](docs/PROTOCOL.md) | `hcg-origin/2`: TLS 1.3 pinned transport, identities, signed messages, invitation expiry, replay protection, endpoints |
+| [docs/contract/hcg-origin-contract-2.json](docs/contract/hcg-origin-contract-2.json) | Machine-readable contract revision 2 shared by Connector, Origin and main HCG |
+| [docs/CENTRAL-HANDOFF.md](docs/CENTRAL-HANDOFF.md) | Handoff to the main HCG project (revision 2): login registration, central API, ownership, revocation, audit, decisions D-O1…D-O6 with recommendations |
 | [docs/SETUP-AND-VERIFY.md](docs/SETUP-AND-VERIFY.md) | Build, run, manual and scripted verification |
 | [docs/STATUS.md](docs/STATUS.md) | What is implemented, verified, development-only, and still blocked |
 | [docs/EXISTING-WORK.md](docs/EXISTING-WORK.md) | What was reused from HCG Server, Connect, ERP, Nexus, Terminal |

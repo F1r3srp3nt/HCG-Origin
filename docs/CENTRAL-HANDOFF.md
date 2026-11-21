@@ -4,6 +4,8 @@
 **For:** the main HCG / Lovable project (`F1r3srp3nt/hakmicapitalgroup`).
 **Supersedes:** the 18 Nov handoff (revision 1).
 No secrets, tokens, client IDs or credentials are in this document or in Origin's build.
+When sent on its own, this file travels with `hcg-origin-contract-2.json` (the machine-readable contract) and
+Origin's `docs/PROTOCOL.md` is available in the Origin repository.
 
 Labels (as in `docs/hcg-server/device-link-handoff.md`): **SOURCE-VERIFIED** (read in main-site source/docs) ·
 **IMPLEMENTED-DEV** (works against Origin's local development service only) · **PROPOSED** (not issued, not
