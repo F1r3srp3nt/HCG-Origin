@@ -69,6 +69,8 @@ public struct GatewaySnapshot: Equatable, Sendable {
     public var devices: [DeviceView]
     public var activity: [ActivityEntry]
     public var startupError: String?
+    public var listenerFailure: ListenerFailure?
+    public var selfTest: SelfTestResult?
 
     public var environment: String { settings.centralMode.wireEnvironment }
     public var isDevelopment: Bool { settings.centralMode == .development }

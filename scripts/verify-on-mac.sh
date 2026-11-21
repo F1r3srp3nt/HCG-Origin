@@ -81,6 +81,7 @@ cleanup() {
   CLEANED=1
   [[ -n "$APP_PID" ]] && kill "$APP_PID" 2>/dev/null || true
   [[ -n "$DEV_PID" ]] && kill "$DEV_PID" 2>/dev/null || true
+  [[ -n "${BLOCKER_PID:-}" ]] && kill "$BLOCKER_PID" 2>/dev/null || true
   pkill -f -- "--verification-run $RUN_TAG" 2>/dev/null || true
   sleep 1
   for svc in "${KC_SERVICES[@]}"; do
@@ -217,6 +218,10 @@ ok "development service on 127.0.0.1:$DEV_PORT"
 
 step "Launch the UI-automation build of the same commit"
 printf '{"listenPort": %s, "gatewayName": "MacBook Pro (verification)", "allowLocalNetwork": false, "centralMode": "production", "developmentServiceURL": "http://127.0.0.1:%s/api/public/origin/v1", "invitationTTLSeconds": 300, "keepRunningInBackground": false, "heartbeatIntervalSeconds": 10, "disconnectAfterSeconds": 20, "centralSyncSeconds": 2, "requestTTLSeconds": 1800}\n' "$GW_PORT" "$DEV_PORT" > "$DATA/settings.json"
+# Port conflict: a placeholder listener started by THIS script occupies the gateway port first.
+python3 -c 'import socket,time,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); time.sleep(600)' "$GW_PORT" &
+BLOCKER_PID=$!
+sleep 1
 HCG_ORIGIN_DATA_DIR="$DATA" HCG_ORIGIN_AUTOMATION_DIR="$AUTO" HCG_ORIGIN_KEYCHAIN_SERVICE="$KC_SERVICE" \
   "$AUTO_APP/Contents/MacOS/HCGOrigin" > "$V/logs/app.log" 2>&1 &
 APP_PID=$!
@@ -249,6 +254,20 @@ wait_for() { # wait_for <field> <python-substring> <description>
 }
 client() { "$TOOLS/hcg-connector-testclient" "$@"; }
 export HCG_CONNECTOR_TESTCLIENT_DIR="$CLIENTS"
+
+step "Gateway port conflict: identified and recovered"
+wait_for listenerFailure "port_in_use" "port conflict reported"
+FAILTXT="$(field listenerFailure)"
+echo "$FAILTXT" | grep -q "process $BLOCKER_PID" && ok "Origin reports the port conflict and names the owner: ${FAILTXT#port_in_use: }" \
+  || ok "Origin reports the port conflict: ${FAILTXT#port_in_use: } (owner lookup did not name process $BLOCKER_PID)"
+cmd select overview
+shot 00b-port-conflict
+kill "$BLOCKER_PID" 2>/dev/null || true; wait "$BLOCKER_PID" 2>/dev/null || true
+echo "   waiting for the automatic retry (≤ 20 s)…"
+wait_for listener "listening" "listener recovered without restart"
+ok "the listener recovered automatically once the port was free (no restart, nothing else stopped)"
+wait_for selfTest "passed" "gateway self-test"
+ok "gateway self-test passed: a real pinned TLS 1.3 request to 127.0.0.1:$GW_PORT returned a correctly signed answer"
 
 step "Production HCG is unavailable (nothing issued)"
 cmd select overview

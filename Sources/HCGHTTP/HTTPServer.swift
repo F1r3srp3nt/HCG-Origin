@@ -62,10 +62,14 @@ public struct HTTPResponse: Sendable {
     }
 }
 
-public enum HTTPServerError: Error, CustomStringConvertible {
+public enum HTTPServerError: Error, CustomStringConvertible, Equatable {
     case socket(String)
     case bind(host: String, port: UInt16, errno: Int32)
     case invalidHost(String)
+    /// The port is already bound by another socket (another program, or another copy of Origin).
+    case addressInUse(port: UInt16)
+    /// The listener did not become ready in time; `detail` is the last state the system reported.
+    case notReady(String)
 
     public var description: String {
         switch self {
@@ -75,6 +79,8 @@ public enum HTTPServerError: Error, CustomStringConvertible {
             if e == EADDRINUSE { return "Port \(port) on \(host) is already in use by another program." }
             return "Could not listen on \(host):\(port): \(detail)"
         case .invalidHost(let h): return "Invalid listening address \(h)"
+        case .addressInUse(let port): return "Port \(port) is already in use by another program."
+        case .notReady(let d): return "The listener did not become ready: \(d)"
         }
     }
 }
@@ -139,6 +145,7 @@ public final class HTTPServer: @unchecked Sendable {
         guard bindResult == 0 else {
             let e = errno
             close(fd)
+            if e == EADDRINUSE { throw HTTPServerError.addressInUse(port: port) }
             throw HTTPServerError.bind(host: host, port: port, errno: e)
         }
         guard listen(fd, 64) == 0 else {

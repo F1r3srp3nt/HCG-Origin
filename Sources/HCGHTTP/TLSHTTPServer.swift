@@ -34,7 +34,8 @@ public final class TLSHTTPServer: ConnectorServer, @unchecked Sendable {
 
     private final class StartBox: @unchecked Sendable {
         let lock = NSLock()
-        var error: String?
+        var error: HTTPServerError?
+        var waiting: String?
         var done = false
     }
 
@@ -51,7 +52,9 @@ public final class TLSHTTPServer: ConnectorServer, @unchecked Sendable {
         let tcp = NWProtocolTCP.Options()
         tcp.connectionTimeout = readTimeoutSeconds
         let params = NWParameters(tls: tls, tcp: tcp)
-        params.allowLocalEndpointReuse = true
+        // No address reuse: a second listener on the same port must fail visibly (EADDRINUSE)
+        // instead of silently sharing the port with another process.
+        params.allowLocalEndpointReuse = false
         if let ip = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options { ip.version = .v4 }
         if loopbackOnly { params.requiredInterfaceType = .loopback }
         let nwPort: NWEndpoint.Port = port == 0 ? .any : (NWEndpoint.Port(rawValue: port) ?? .any)
@@ -66,8 +69,14 @@ public final class TLSHTTPServer: ConnectorServer, @unchecked Sendable {
             switch state {
             case .ready:
                 if !box.done { box.done = true; ready.signal() }
-            case .failed(let e), .waiting(let e):
-                if !box.done { box.error = Self.describe(e); box.done = true; ready.signal() }
+            case .failed(let e):
+                if !box.done { box.error = Self.classify(e, port: self.port); box.done = true; ready.signal() }
+            case .waiting(let e):
+                // Waiting can be transient; it becomes the failure reason only if the listener never gets ready.
+                box.waiting = Self.describe(e)
+                if case .posix(let code) = e, code == .EADDRINUSE, !box.done {
+                    box.error = .addressInUse(port: self.port); box.done = true; ready.signal()
+                }
             default: break
             }
         }
@@ -75,18 +84,24 @@ public final class TLSHTTPServer: ConnectorServer, @unchecked Sendable {
         l.start(queue: queue)
         if ready.wait(timeout: .now() + 5) == .timedOut {
             l.cancel()
-            throw HTTPServerError.socket("the TLS listener did not start within 5 s")
+            box.lock.lock(); let waiting = box.waiting; box.lock.unlock()
+            throw HTTPServerError.notReady(waiting ?? "no state change within 5 s")
         }
         box.lock.lock(); let failure = box.error; box.lock.unlock()
         if let failure {
             l.cancel()
-            throw HTTPServerError.socket(failure)
+            throw failure
         }
         lock.lock()
         listener = l
         port = l.port?.rawValue ?? port
         lock.unlock()
         return port
+    }
+
+    static func classify(_ e: NWError, port: UInt16) -> HTTPServerError {
+        if case .posix(let code) = e, code == .EADDRINUSE { return .addressInUse(port: port) }
+        return .socket(describe(e))
     }
 
     static func describe(_ e: NWError) -> String {

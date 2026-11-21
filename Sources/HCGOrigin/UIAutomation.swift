@@ -89,6 +89,8 @@ final class UIAutomation {
                 let inv = try await model.engine.startPairing()
                 model.showPairing = true
                 write("invitation.txt", raw: inv.code)
+            case "selfTest":
+                await model.engine.runSelfTest()
             case "cancelPairing":
                 await model.engine.cancelPairing()
                 model.showPairing = false
@@ -134,6 +136,8 @@ final class UIAutomation {
         o["transport"] = s.transport?.invitationTransport ?? ""
         o["tlsFingerprint"] = s.transport?.tlsFingerprint ?? ""
         o["listener"] = "\(s.listener)"
+        o["listenerFailure"] = s.listenerFailure.map { "\($0.kind.rawValue): \($0.summary)" } ?? ""
+        o["selfTest"] = s.selfTest.map { $0.passed ? "passed" : "failed: \($0.detail)" } ?? ""
         o["account"] = s.account?.email ?? ""
         o["gatewayId"] = s.registration?.gatewayId ?? ""
         o["requests"] = s.requests.map { "\($0.id)=\($0.state.rawValue)/\($0.checkCode)" }.joined(separator: ",")

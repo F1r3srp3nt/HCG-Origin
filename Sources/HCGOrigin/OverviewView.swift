@@ -77,12 +77,20 @@ struct PairingButton: View {
 }
 
 struct GatewayPanel: View {
+    @EnvironmentObject var model: AppModel
     let s: GatewaySnapshot
     var body: some View {
         Panel("Gateway") {
             HStack(spacing: 10) {
                 StatusDot(tone: tone, pulsing: tone == .ok)
                 Text(title).font(.headline)
+                Spacer()
+                if let t = s.selfTest {
+                    Badge(text: t.passed ? "SELF-TEST OK" : "SELF-TEST FAILED", tone: t.passed ? .ok : .err)
+                }
+            }
+            if let f = s.listenerFailure {
+                ListenerFailureView(failure: f, now: s.now)
             }
             FieldRow(label: "Name", value: s.settings.gatewayName)
             FieldRow(label: "Listening", value: address)
@@ -146,5 +154,33 @@ enum TransportText {
         case .cleartextLoopbackDevelopment?: return "Cleartext, this Mac only (development)"
         case nil: return "Not listening"
         }
+    }
+}
+
+struct ListenerFailureView: View {
+    @EnvironmentObject var model: AppModel
+    let failure: ListenerFailure
+    let now: Date
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(failure.summary).font(.callout).foregroundStyle(HCG.err).fixedSize(horizontal: false, vertical: true)
+            if let next = failure.nextRetryAt {
+                Text("Retrying automatically \(Fmt.ago(next, now: now)) (attempt \(failure.attempts)).")
+                    .font(.caption).foregroundStyle(HCG.textDim)
+            }
+            HStack {
+                Button("Retry Now") { model.retryListener() }.hcgButton()
+                if failure.kind == .portInUse {
+                    if let other = failure.owners.first(where: { $0.isHCGOrigin && !$0.isThisProcess }) {
+                        Button("Switch to the Running Copy") { model.switchToRunningCopy(pid: other.pid) }.hcgButton()
+                    } else {
+                        Button("Use a Free Port") { model.moveToFreePort() }.hcgButton()
+                    }
+                }
+                Button("Diagnostics") { model.section = .settings }.hcgButton()
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(HCG.err.opacity(0.08)))
     }
 }

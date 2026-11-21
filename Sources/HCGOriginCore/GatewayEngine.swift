@@ -52,6 +52,10 @@ public actor GatewayEngine {
     var knownConnection: [String: ConnectionState] = [:]
     let replay = ReplayGuard()
     var lastSecurityLog: [String: Date] = [:]
+    var dataLock: GatewayLock?
+    var listenerFailure: ListenerFailure?
+    var selfTest: SelfTestResult?
+    let dataDirectory: URL
 
     public init(dataDirectory: URL, secrets: SecretStore, production: ProductionConfiguration,
                 hostName: String, preferSecureEnclave: Bool = true,
@@ -59,6 +63,7 @@ public actor GatewayEngine {
                 clock: @escaping @Sendable () -> Date = { Date() },
                 makeCentral: CentralFactory? = nil) {
         self.files = JSONFileStore(directory: dataDirectory)
+        self.dataDirectory = dataDirectory
         self.secrets = secrets
         self.production = production
         self.hostName = hostName
@@ -79,6 +84,16 @@ public actor GatewayEngine {
     }
 
     public func start(runLoop: Bool = true) async {
+        // One gateway per data folder. A second copy of Origin must not fight over the port or the state files.
+        do {
+            dataLock = try GatewayLock.acquire(directory: dataDirectory)
+        } catch {
+            startupError = "\(error)"
+            listenerState = .failed("\(error)")
+            OriginLog.error("gateway lock not acquired: \(error)")
+            notify()
+            return
+        }
         state = files.load(OriginState.self, from: "state.json") ?? OriginState()
         activity = files.readLines("activity.jsonl", last: 500).compactMap { try? Wire.decoder().decode(ActivityEntry.self, from: $0) }
         do {
@@ -117,6 +132,7 @@ public actor GatewayEngine {
         listener = nil
         listenerState = .stopped
         persist()
+        dataLock = nil
         notify()
     }
 
@@ -143,7 +159,8 @@ public actor GatewayEngine {
                 DeviceView(record: $0, connection: $0.connectionState(now: now, disconnectAfter: disconnectAfter))
             },
             activity: Array(activity.suffix(500).reversed()),
-            startupError: startupError)
+            startupError: startupError,
+            listenerFailure: listenerFailure, selfTest: selfTest)
     }
 
     func notify() {
@@ -198,6 +215,7 @@ public actor GatewayEngine {
             guard let self else { return HTTPResponse(status: 503) }
             return await self.handle(request)
         }
+        let previousFailure = listenerFailure
         do {
             let (server, security) = try transportFactory.make(settings.listenPort, !settings.allowLocalNetwork, handler)
             if settings.allowLocalNetwork && !security.isEncrypted {
@@ -206,6 +224,11 @@ public actor GatewayEngine {
             let port = try server.start()
             listener = server
             transport = security
+            if previousFailure != nil {
+                log(.gateway, .success, "Gateway listener recovered", "Listening again after \(previousFailure!.attempts) failed attempt(s).")
+            }
+            listenerFailure = nil
+            scheduleSelfTest()
             let shown = settings.allowLocalNetwork ? "\(NetworkAddress.primaryLANAddress() ?? "0.0.0.0"):\(port)" : "127.0.0.1:\(port)"
             listenerState = .listening(address: shown, localNetwork: settings.allowLocalNetwork)
             let how: String
@@ -217,9 +240,107 @@ public actor GatewayEngine {
                 ? "On the local network at \(shown) (\(how)). Only signed requests with a valid invitation are accepted."
                 : "On this Mac only (\(shown), \(how)).")
         } catch {
-            listenerState = .failed("\(error)")
-            log(.error, .error, "Gateway listener failed", "\(error)")
+            let failure = classifyListenerFailure(error, previous: previousFailure)
+            listenerFailure = failure
+            listenerState = .failed(failure.summary)
+            selfTest = nil
+            // Log a failure once per distinct cause, not on every automatic retry.
+            if previousFailure?.summary != failure.summary {
+                log(.error, .error, "Gateway listener failed", failure.summary
+                    + (failure.nextRetryAt != nil ? " Origin retries automatically." : ""))
+            }
         }
+    }
+
+    func classifyListenerFailure(_ error: Error, previous: ListenerFailure?) -> ListenerFailure {
+        let port = settings.listenPort
+        var kind: ListenerFailure.Kind = .other
+        var owners: [PortOwner] = []
+        var message = "\(error)"
+        switch error {
+        case HTTPServerError.addressInUse:
+            kind = .portInUse
+            owners = PortOwnerLookup.owners(port: port)
+        case let e as HTTPServerError:
+            if case .notReady(let d) = e { kind = .notReady; message = d }
+        case TransportError.encryptionRequired:
+            kind = .encryptionRequired
+        case let e as TransportError:
+            if case .keychain(let d) = e { kind = .tlsIdentity; message = d }
+        default: break
+        }
+        let attempts = (previous?.port == port && previous?.kind == kind) ? (previous!.attempts + 1) : 1
+        // Retry transient causes with back-off (15 s, 30 s, 60 s …, at most 5 min). A configuration problem waits for the owner.
+        let retryable = kind == .portInUse || kind == .notReady || kind == .other
+        let delay = min(300.0, 15.0 * pow(2.0, Double(min(attempts - 1, 5))))
+        return ListenerFailure(kind: kind, message: message, port: port, owners: owners, at: clock(), attempts: attempts,
+                               nextRetryAt: retryable ? clock().addingTimeInterval(delay) : nil)
+    }
+
+    /// Retries now (owner action).
+    public func retryListener() {
+        startListener()
+        notify()
+    }
+
+    /// Ports 47700–47719 on 127.0.0.1 that can be bound right now.
+    public func freeGatewayPorts() -> [UInt16] {
+        (47_700...47_719).map { UInt16($0) }.filter { $0 != settings.listenPort && PortOwnerLookup.isFreeOnLoopback($0) }
+    }
+
+    /// Moves the gateway to the first free port in 47700–47719 (owner action). Devices already paired keep the
+    /// old address and must be given the new one (new invitation).
+    public func moveToFreePort() -> UInt16? {
+        guard let port = freeGatewayPorts().first else { return nil }
+        let old = settings.listenPort
+        updateSettings { $0.listenPort = port }
+        log(.gateway, .warning, "Gateway moved to port \(port)",
+            "Port \(old) was unavailable. Devices paired with the old port need a new invitation to reach this one.")
+        return port
+    }
+
+    func scheduleSelfTest() {
+        Task { await self.runSelfTest() }
+    }
+
+    /// A real request to this gateway's own listener over its actual transport; verifies the signed answer.
+    @discardableResult
+    public func runSelfTest() async -> SelfTestResult? {
+        guard let port = listener?.port, let transport, let identity else { return nil }
+        let result = await GatewaySelfTest.run(port: port, transport: transport, gatewayFingerprint: identity.fingerprint)
+        let changed = selfTest?.passed != result.passed
+        selfTest = result
+        if changed || !result.passed {
+            log(.gateway, result.passed ? .success : .error, result.passed ? "Gateway self-test passed" : "Gateway self-test failed", result.detail)
+        }
+        notify()
+        return result
+    }
+
+    /// Plain-text diagnostics for support (no secrets: no tokens, invitation codes or keys).
+    public func diagnosticsReport() -> String {
+        var lines: [String] = []
+        lines.append("HCG Origin \(OriginVersion.marketing) — gateway diagnostics, \(ISO8601DateFormatter().string(from: clock()))")
+        lines.append("Process: \(ProcessInfo.processInfo.processIdentifier) · data folder: \(dataDirectory.path)")
+        lines.append("Data-folder lock: \(dataLock != nil ? "held by this process" : "NOT held")")
+        lines.append("Listener: \(listenerState)")
+        lines.append("Configured port: \(settings.listenPort) · interface: \(settings.allowLocalNetwork ? "all IPv4 (local network enabled)" : "loopback only (127.0.0.1)")")
+        if let f = listenerFailure {
+            lines.append("Failure: [\(f.kind.rawValue)] \(f.summary) · attempts \(f.attempts)" + (f.nextRetryAt.map { " · next retry \(ISO8601DateFormatter().string(from: $0))" } ?? " · no automatic retry"))
+            for o in f.owners { lines.append("  port owner: pid \(o.pid) \(o.command) \(o.executablePath ?? "") \(o.address)\(o.isHCGOrigin ? " [HCG Origin]" : "")") }
+        }
+        switch transport {
+        case .tls13Pinned(let fp, let storage)?: lines.append("Transport: TLS 1.3 pinned · TLS key \(fp) · \(storage)")
+        case .cleartextLoopbackDevelopment?: lines.append("Transport: cleartext loopback (development)")
+        case nil: lines.append("Transport: none (not listening)")
+        }
+        lines.append("Gateway identity: \(identity?.fingerprint ?? "unavailable") · \(identity?.keyStorage ?? "-")")
+        if let t = selfTest { lines.append("Self-test: \(t.passed ? "PASSED" : "FAILED") at \(ISO8601DateFormatter().string(from: t.at)) — \(t.detail)") }
+        else { lines.append("Self-test: not run") }
+        lines.append("Central: \(settings.centralMode.rawValue) · \(centralStatus.reachability) · signed in: \(state.accounts[settings.centralMode.wireEnvironment] != nil)")
+        lines.append("Production configuration complete: \(production.isComplete)" + (production.isComplete ? "" : " (missing: \(production.problems.joined(separator: "; ")))"))
+        if let e = startupError { lines.append("Startup error: \(e)") }
+        return lines.joined(separator: "\n")
     }
 
     public func restartListener() {
@@ -771,6 +892,10 @@ public actor GatewayEngine {
     public func tick() async {
         let now = clock()
         var changed = false
+        if let f = listenerFailure, let retry = f.nextRetryAt, retry <= now, dataLock != nil {
+            startListener()
+            changed = true
+        }
         for failure in TransportDiagnostics.shared.drain() {
             securityLog("tls-\(failure.remote)", "Encrypted connection failed", "From \(failure.remote): \(failure.reason)")
         }

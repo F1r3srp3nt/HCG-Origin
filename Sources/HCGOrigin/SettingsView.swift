@@ -16,6 +16,7 @@ struct SettingsView: View {
                         IdentityPanel(s: s)
                         ConnectionPanel(s: s)
                     }
+                    DiagnosticsPanel(s: s)
                     BackgroundPanel(s: s)
                     AboutPanel(s: s)
                 }
@@ -225,6 +226,42 @@ struct AboutPanel: View {
             FieldRow(label: "Built", value: model.build.builtAt)
             FieldRow(label: "Protocol", value: "\(OriginProtocol.version) · central contract: proposed, not issued")
             FieldRow(label: "Signing", value: "Ad hoc (development). Not notarized.")
+        }
+    }
+}
+
+struct DiagnosticsPanel: View {
+    @EnvironmentObject var model: AppModel
+    let s: GatewaySnapshot
+    var body: some View {
+        Panel("Gateway diagnostics") {
+            FieldRow(label: "Listener", value: listener)
+            FieldRow(label: "Interface", value: s.settings.allowLocalNetwork ? "All IPv4 interfaces; loopback and private peers only" : "Loopback only (127.0.0.1)")
+            FieldRow(label: "Port", value: "\(s.settings.listenPort)")
+            if let f = s.listenerFailure {
+                FieldRow(label: "Failure", value: "[\(f.kind.rawValue)] \(f.summary)")
+                ForEach(f.owners, id: \.pid) { o in
+                    FieldRow(label: "Port owner", value: "\(o.command) · process \(o.pid)\(o.isHCGOrigin ? " · HCG Origin" : "")\(o.executablePath.map { " · \($0)" } ?? "")", mono: true, selectable: true)
+                }
+            }
+            if let e = s.startupError { FieldRow(label: "Startup", value: e) }
+            FieldRow(label: "Encryption", value: TransportText.summary(s.transport))
+            FieldRow(label: "Self-test", value: s.selfTest.map { "\($0.passed ? "Passed" : "Failed") \(Fmt.ago($0.at, now: s.now)) — \($0.detail)" } ?? "Not run")
+            HStack {
+                Button("Run Self-Test") { model.runSelfTest() }.hcgButton().disabled(s.transport == nil)
+                Button("Retry Listener") { model.retryListener() }.hcgButton()
+                Button("Use a Free Port") { model.moveToFreePort() }.hcgButton()
+                Button("Copy Diagnostics") { model.copyDiagnostics() }.hcgButton()
+            }
+            Text("Diagnostics contain no tokens, invitation codes or keys. Origin never stops other programs; if another program owns the port, quit it or choose a free port.")
+                .font(.caption).foregroundStyle(HCG.textFaint)
+        }
+    }
+    var listener: String {
+        switch s.listener {
+        case .listening(let a, _): return "Listening on \(a)"
+        case .stopped: return "Stopped"
+        case .failed(let e): return "Failed — \(e)"
         }
     }
 }

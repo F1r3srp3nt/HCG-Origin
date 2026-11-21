@@ -446,4 +446,77 @@ final class EnrollmentFlowTests: XCTestCase {
         await h.engine.syncNow()
         _ = try await client.heartbeat()
     }
+
+    // MARK: Gateway listener diagnosis and recovery
+
+    func testSecondCopyCannotRunTheSameGateway() async throws {
+        let h = try Harness()
+        defer { Task { await h.tearDown() } }
+        try await h.start()
+        let second = GatewayEngine(dataDirectory: h.dir, secrets: MemorySecretStore(), production: ProductionConfiguration(),
+                                   hostName: "Second copy", preferSecureEnclave: false)
+        await second.start(runLoop: false)
+        let snap = await second.snapshot()
+        XCTAssertTrue(snap.startupError?.contains("Another HCG Origin is already running") == true, snap.startupError ?? "nil")
+        guard case .failed = snap.listener else { return XCTFail("second copy must not listen") }
+        await second.shutdown()
+        // The first copy is unaffected.
+        let first = await h.snapshot()
+        guard case .listening = first.listener else { return XCTFail("first copy stopped") }
+    }
+
+    func testPortConflictIsIdentifiedRetriedAndRecovered() async throws {
+        // Occupy a port, then point a fresh gateway at it.
+        let blocker = HTTPServer(host: "127.0.0.1", port: 0) { _ in HTTPResponse(status: 204) }
+        let busyPort = try blocker.start()
+        let h = try Harness()
+        defer { Task { await h.tearDown() } }
+        var settings = OriginSettings.defaults(hostName: "Test Mac")
+        settings.listenPort = busyPort
+        settings.centralMode = .development
+        settings.developmentServiceURL = h.dev.baseURL.absoluteString
+        try JSONFileStore(directory: h.dir).save(settings, to: "settings.json")
+        let engine = GatewayEngine(dataDirectory: h.dir, secrets: MemorySecretStore(), production: ProductionConfiguration(),
+                                   hostName: "Test Mac", preferSecureEnclave: false, clock: { h.clock.now() })
+        await engine.start(runLoop: false)
+        var snap = await engine.snapshot()
+        let failure = try XCTUnwrap(snap.listenerFailure)
+        XCTAssertEqual(failure.kind, .portInUse)
+        XCTAssertEqual(failure.port, busyPort)
+        XCTAssertNotNil(failure.nextRetryAt, "a port conflict is retried automatically")
+        XCTAssertTrue(failure.summary.contains("\(busyPort)"))
+        if !failure.owners.isEmpty { // lsof available: the owner is this test process, not another Origin
+            XCTAssertTrue(failure.owners.contains { $0.isThisProcess })
+        }
+        // The blocker goes away; the automatic retry recovers without a restart.
+        blocker.stop()
+        h.clock.advance(16)
+        await engine.tick()
+        snap = await engine.snapshot()
+        guard case .listening = snap.listener else { return XCTFail("did not recover: \(snap.listener)") }
+        XCTAssertNil(snap.listenerFailure)
+        XCTAssertTrue(snap.activity.contains { $0.title == "Gateway listener recovered" })
+        let test = await engine.runSelfTest()
+        XCTAssertEqual(test?.passed, true, test?.detail ?? "no self-test")
+        await engine.shutdown()
+    }
+
+    func testMoveToFreePortAndSelfTest() async throws {
+        let h = try Harness()
+        defer { Task { await h.tearDown() } }
+        try await h.start()
+        let before = await h.snapshot()
+        guard case .listening = before.listener else { return XCTFail("not listening") }
+        let test = await h.engine.runSelfTest()
+        XCTAssertEqual(test?.passed, true, test?.detail ?? "")
+        let moved = await h.engine.moveToFreePort()
+        let port = try XCTUnwrap(moved)
+        XCTAssertTrue((47_700...47_719).contains(Int(port)))
+        let after = await h.snapshot()
+        guard case .listening(let address, _) = after.listener else { return XCTFail("not listening after move") }
+        XCTAssertTrue(address.hasSuffix(":\(port)"))
+        let report = await h.engine.diagnosticsReport()
+        XCTAssertTrue(report.contains("Data-folder lock: held by this process"))
+        XCTAssertFalse(report.contains("hcgdev_tok_"), "diagnostics must not contain tokens")
+    }
 }

@@ -147,6 +147,31 @@ final class AppModel: ObservableObject {
     func removeRecord(_ id: String) { Task { await engine.removeDeviceRecord(id: id) } }
     func dismissRequest(_ id: String) { Task { await engine.dismissRequest(id: id) } }
     func restartListener() { Task { await engine.restartListener() } }
+    func retryListener() { Task { await engine.retryListener() } }
+    func runSelfTest() { Task { await engine.runSelfTest() } }
+
+    func moveToFreePort() {
+        Task {
+            if await engine.moveToFreePort() == nil {
+                await MainActor.run { self.notice = "No free port in 47700–47719 on this Mac." }
+            }
+        }
+    }
+
+    func copyDiagnostics() {
+        Task {
+            let report = await engine.diagnosticsReport()
+            await MainActor.run {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(report, forType: .string)
+            }
+        }
+    }
+
+    /// Brings the copy of HCG Origin that owns the gateway to the front (when another copy holds it).
+    func switchToRunningCopy(pid: Int32) {
+        NSRunningApplication(processIdentifier: pid)?.activate(options: [])
+    }
 
     /// HCG Connect sign-in (system browser, PKCE). Only reachable when every production value is configured.
     func signInWithHCGConnect() {
