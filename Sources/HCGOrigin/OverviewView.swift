@@ -89,7 +89,10 @@ struct GatewayPanel: View {
             FieldRow(label: "Reachable from", value: s.settings.allowLocalNetwork ? "Local network (explicitly enabled)" : "This Mac only")
             FieldRow(label: "Key fingerprint", value: KeyFingerprint.short(s.gatewayFingerprint), mono: true)
             FieldRow(label: "Gateway ID", value: s.registration?.gatewayId ?? "Not issued — proposed \(s.proposedGatewayId)", mono: true)
-            FieldRow(label: "Pairing transport", value: "HTTP with signed messages (hcg-origin/1)")
+            FieldRow(label: "Transport", value: TransportText.summary(s.transport))
+            if let fp = s.transport?.tlsFingerprint {
+                FieldRow(label: "TLS key (pinned)", value: KeyFingerprint.short(fp), mono: true)
+            }
         }
     }
     var tone: Tone { switch s.listener { case .listening: return .ok; case .stopped: return .neutral; case .failed: return .err } }
@@ -132,6 +135,16 @@ struct CentralPanel: View {
                     .disabled(s.central.serviceURL == nil)
                 Button("Account & Settings") { model.section = .settings }.hcgButton()
             }
+        }
+    }
+}
+
+enum TransportText {
+    static func summary(_ t: TransportSecurity?) -> String {
+        switch t {
+        case .tls13Pinned?: return "TLS 1.3, pinned certificate · signed messages (\(OriginProtocol.version))"
+        case .cleartextLoopbackDevelopment?: return "Cleartext, this Mac only (development)"
+        case nil: return "Not listening"
         }
     }
 }

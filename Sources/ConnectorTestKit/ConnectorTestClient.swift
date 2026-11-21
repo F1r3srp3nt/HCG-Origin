@@ -20,6 +20,10 @@ public final class ConnectorTestClient: @unchecked Sendable {
         public var name: String
         public var address: String
         public var environment: String
+        /// `InvitationTransport` value; `tls13-pinned` unless this is the Linux development harness.
+        public var transport: String
+        /// Pinned TLS key fingerprint from the invitation.
+        public var tlsFingerprint: String?
     }
 
     public struct Profile: Codable, Equatable, Sendable {
@@ -62,7 +66,6 @@ public final class ConnectorTestClient: @unchecked Sendable {
     public let profileURL: URL
     public internal(set) var profile: Profile
     let signer: SoftwareSigner
-    let http = HTTPClient(timeout: 10)
 
     public init(profileDirectory: URL, name: String? = nil) throws {
         profileURL = profileDirectory.appendingPathComponent("profile.json")
@@ -108,27 +111,43 @@ public final class ConnectorTestClient: @unchecked Sendable {
 
     public struct PreparedRequest: Sendable {
         public var url: URL
+        public var tlsPin: String?
         public var path: String
         public var body: Data
         public var headers: [String: String]
         public var nonce: String
     }
 
-    public func prepare(path: String, body: Data, address: String, invitation: (id: String, secret: String)? = nil,
-                        now: Date = Date()) throws -> PreparedRequest {
-        guard let url = URL(string: "http://\(address)\(path)") else { throw ClientError.transport("bad gateway address \(address)") }
-        try HTTPClient.checkTransport(url, allowPrivateNetworkHTTP: true)
+    public func prepare(path: String, body: Data, address: String, transport: String, tlsFingerprint: String?,
+                        invitation: (id: String, secret: String)? = nil, now: Date = Date()) throws -> PreparedRequest {
+        let scheme: String
+        switch transport {
+        case InvitationTransport.tls13Pinned:
+            guard let pin = tlsFingerprint, KeyFingerprint.isValid(pin) else { throw ClientError.transport("missing TLS pin") }
+            scheme = "https"
+        case InvitationTransport.cleartextLoopbackDevelopment:
+            guard address.hasPrefix("127.") else { throw ClientError.transport("cleartext is allowed only to 127.0.0.1") }
+            scheme = "http"
+        default:
+            throw ClientError.transport("unsupported transport \(transport)")
+        }
+        guard let url = URL(string: "\(scheme)://\(address)\(path)") else { throw ClientError.transport("bad gateway address \(address)") }
+        try HTTPClient.checkTransport(url)
         let nonce = SignedEnvelope.newNonce()
         let headers = try SignedEnvelope.signRequest(method: "POST", path: path, body: body, signer: signer, now: now,
                                                      nonce: nonce, invitation: invitation)
-        return PreparedRequest(url: url, path: path, body: body, headers: headers, nonce: nonce)
+        return PreparedRequest(url: url, tlsPin: scheme == "https" ? tlsFingerprint : nil, path: path, body: body, headers: headers, nonce: nonce)
     }
 
     /// Sends a prepared request and verifies the response against the pinned gateway fingerprint.
     public func send(_ request: PreparedRequest, pinnedFingerprint: String) async throws -> HTTPClientResponse {
         let response: HTTPClientResponse
         do {
+            let http = HTTPClient(timeout: 10, pinnedTLSFingerprint: request.tlsPin)
             response = try await http.send(method: "POST", url: request.url, headers: request.headers, body: request.body)
+        } catch let e as HTTPClientError {
+            if case .tlsPinMismatch = e { throw ClientError.transport(e.description) }
+            throw ClientError.transport("Gateway not reachable at \(request.url.host ?? "?"):\(request.url.port ?? 0) — \(e)")
         } catch {
             throw ClientError.transport("Gateway not reachable at \(request.url.host ?? "?"):\(request.url.port ?? 0) — \(error)")
         }
@@ -166,6 +185,7 @@ public final class ConnectorTestClient: @unchecked Sendable {
         let body = Wire.encode(EnrollRequestBody(invitationId: invitation.invitationId, gatewayFingerprint: invitation.gatewayFingerprint,
                                                  device: descriptor, requestedCapabilities: capabilities))
         let prepared = try prepare(path: OriginPath.enroll, body: body, address: invitation.address,
+                                   transport: invitation.transport, tlsFingerprint: invitation.tlsFingerprint,
                                    invitation: (invitation.invitationId, invitation.secret))
         let response = try await send(prepared, pinnedFingerprint: invitation.gatewayFingerprint)
         let result = try decode(EnrollResponseBody.self, response)
@@ -174,11 +194,16 @@ public final class ConnectorTestClient: @unchecked Sendable {
               KeyFingerprint.of(publicKeyDER: key) == invitation.gatewayFingerprint else {
             throw ClientError.unverifiedResponse("gateway identity in the body does not match the invitation")
         }
+        // Channel binding: the gateway identity key signed the TLS key this response arrived over.
+        guard result.transport == invitation.transport, result.tlsFingerprint == invitation.tlsFingerprint else {
+            throw ClientError.unverifiedResponse("the signed transport binding does not match the pinned TLS key")
+        }
         let expectedCheck = PairingCheckCode.compute(gatewayFingerprint: invitation.gatewayFingerprint,
                                                      deviceFingerprint: fingerprint, invitationId: invitation.invitationId)
         guard expectedCheck == result.checkCode else { throw ClientError.unverifiedResponse("check code mismatch") }
         profile.gateway = PairedGateway(fingerprint: invitation.gatewayFingerprint, publicKey: result.gatewayPublicKey,
-                                        name: result.gatewayName, address: invitation.address, environment: invitation.environment)
+                                        name: result.gatewayName, address: invitation.address, environment: invitation.environment,
+                                        transport: invitation.transport, tlsFingerprint: invitation.tlsFingerprint)
         profile.requestId = result.requestId
         profile.checkCode = result.checkCode
         profile.deviceId = nil
@@ -190,8 +215,9 @@ public final class ConnectorTestClient: @unchecked Sendable {
     public func status() async throws -> EnrollmentStatusResponseBody {
         guard let gw = profile.gateway, let requestId = profile.requestId else { throw ClientError.notPaired }
         let prepared = try prepare(path: OriginPath.enrollmentStatus, body: Wire.encode(EnrollmentStatusRequestBody(requestId: requestId)),
-                                   address: gw.address)
+                                   address: gw.address, transport: gw.transport, tlsFingerprint: gw.tlsFingerprint)
         let result = try decode(EnrollmentStatusResponseBody.self, try await send(prepared, pinnedFingerprint: gw.fingerprint))
+        guard result.tlsFingerprint == gw.tlsFingerprint else { throw ClientError.unverifiedResponse("transport binding mismatch") }
         if result.state == .approved, let id = result.deviceId {
             profile.deviceId = id
             profile.grant = result.grant
@@ -207,8 +233,9 @@ public final class ConnectorTestClient: @unchecked Sendable {
         try save()
         let prepared = try prepare(path: OriginPath.heartbeat,
                                    body: Wire.encode(HeartbeatRequestBody(deviceId: deviceId, sequence: profile.sequence, report: report)),
-                                   address: gw.address)
+                                   address: gw.address, transport: gw.transport, tlsFingerprint: gw.tlsFingerprint)
         let result = try decode(HeartbeatResponseBody.self, try await send(prepared, pinnedFingerprint: gw.fingerprint))
+        guard result.tlsFingerprint == gw.tlsFingerprint else { throw ClientError.unverifiedResponse("transport binding mismatch") }
         profile.grant = result.grant
         try save()
         return result

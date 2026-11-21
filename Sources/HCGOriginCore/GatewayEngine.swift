@@ -29,13 +29,18 @@ public actor GatewayEngine {
     let clock: @Sendable () -> Date
     let hostName: String
     let preferSecureEnclave: Bool
+    let transportFactory: ConnectorTransportFactory
 
     // MARK: State
     var settings: OriginSettings
     var state = OriginState()
     var identity: GatewayIdentity?
     var startupError: String?
-    var listener: HTTPServer?
+    var listener: ConnectorServer?
+    var transport: TransportSecurity?
+    /// Last successful admission check (central device list) per environment. In memory only,
+    /// so a restarted gateway must hear from central before it lets devices connect again.
+    var lastAdmissionSync: [String: Date] = [:]
     var listenerState: ListenerState = .stopped
     var centralStatus: CentralStatus
     var activeInvitation: ActiveInvitation?
@@ -50,6 +55,7 @@ public actor GatewayEngine {
 
     public init(dataDirectory: URL, secrets: SecretStore, production: ProductionConfiguration,
                 hostName: String, preferSecureEnclave: Bool = true,
+                transport: ConnectorTransportFactory = .cleartextLoopback,
                 clock: @escaping @Sendable () -> Date = { Date() },
                 makeCentral: CentralFactory? = nil) {
         self.files = JSONFileStore(directory: dataDirectory)
@@ -57,6 +63,7 @@ public actor GatewayEngine {
         self.production = production
         self.hostName = hostName
         self.preferSecureEnclave = preferSecureEnclave
+        self.transportFactory = transport
         self.clock = clock
         self.makeCentral = makeCentral ?? { mode, url, signer in HTTPCentralService(mode: mode, baseURL: url, signer: signer) }
         let loaded = files.load(OriginSettings.self, from: "settings.json") ?? OriginSettings.defaults(hostName: hostName)
@@ -125,6 +132,7 @@ public actor GatewayEngine {
             gatewayFingerprint: identity?.fingerprint ?? "",
             proposedGatewayId: identity?.proposedGatewayId ?? "",
             keyStorage: identity?.keyStorage ?? "unavailable",
+            transport: transport,
             secretStorage: secrets.kindDescription,
             listener: listenerState, central: centralStatus,
             account: state.accounts[env], registration: currentRegistration,
@@ -185,19 +193,29 @@ public actor GatewayEngine {
     func startListener() {
         listener?.stop()
         listener = nil
-        let host = settings.allowLocalNetwork ? "0.0.0.0" : "127.0.0.1"
-        let server = HTTPServer(host: host, port: settings.listenPort) { [weak self] request in
+        transport = nil
+        let handler: HTTPServer.Handler = { [weak self] request in
             guard let self else { return HTTPResponse(status: 503) }
             return await self.handle(request)
         }
         do {
+            let (server, security) = try transportFactory.make(settings.listenPort, !settings.allowLocalNetwork, handler)
+            if settings.allowLocalNetwork && !security.isEncrypted {
+                throw TransportError.encryptionRequired // never offer cleartext beyond this Mac
+            }
             let port = try server.start()
             listener = server
+            transport = security
             let shown = settings.allowLocalNetwork ? "\(NetworkAddress.primaryLANAddress() ?? "0.0.0.0"):\(port)" : "127.0.0.1:\(port)"
             listenerState = .listening(address: shown, localNetwork: settings.allowLocalNetwork)
+            let how: String
+            switch security {
+            case .tls13Pinned(let fp, _): how = "TLS 1.3, pinned certificate \(KeyFingerprint.short(fp))"
+            case .cleartextLoopbackDevelopment: how = "cleartext development transport, this Mac only"
+            }
             log(.gateway, .info, "Listening for Connector requests", settings.allowLocalNetwork
-                ? "On the local network at \(shown). Only signed requests with a valid invitation are accepted."
-                : "On this Mac only (\(shown)).")
+                ? "On the local network at \(shown) (\(how)). Only signed requests with a valid invitation are accepted."
+                : "On this Mac only (\(shown), \(how)).")
         } catch {
             listenerState = .failed("\(error)")
             log(.error, .error, "Gateway listener failed", "\(error)")
@@ -211,7 +229,7 @@ public actor GatewayEngine {
     }
 
     var invitationAddress: String? {
-        guard case .listening = listenerState, let port = listener?.port else { return nil }
+        guard case .listening = listenerState, let port = listener?.port, transport != nil else { return nil }
         if settings.allowLocalNetwork {
             guard let lan = NetworkAddress.primaryLANAddress() else { return nil }
             return "\(lan):\(port)"
@@ -382,6 +400,8 @@ public actor GatewayEngine {
         } catch let e as CentralError {
             if case .environmentMismatch = e {
                 centralStatus.reachability = .mismatch(e.description)
+            } else if case .unsupportedVersion = e {
+                centralStatus.reachability = .mismatch(e.description)
             } else if case .unreachable(_, let since) = centralStatus.reachability {
                 centralStatus.reachability = .unreachable(e.description, since: since)
             } else {
@@ -408,7 +428,8 @@ public actor GatewayEngine {
             if currentRegistration == nil {
                 let reg = try await central.registerGateway(GatewayRegistrationRequest(
                     gatewayPublicKey: identity.publicKeyBase64url, proposedGatewayId: identity.proposedGatewayId,
-                    name: settings.gatewayName, platform: Self.platformDescription, originVersion: OriginVersion.marketing), token: token)
+                    name: settings.gatewayName, platform: Self.platformDescription, originVersion: OriginVersion.marketing,
+                    transportFingerprint: transport?.tlsFingerprint), token: token)
                 guard reg.gatewayFingerprint == identity.fingerprint, reg.environment == env else {
                     throw CentralError.malformed("registration does not match this gateway")
                 }
@@ -427,6 +448,7 @@ public actor GatewayEngine {
             // 3. Admission state of enrolled devices (revocation, narrowed grants).
             let list = try await central.devices(gatewayId: reg.gatewayId, token: token)
             applyDeviceList(list, environment: env)
+            lastAdmissionSync[env] = clock()
 
             // 4. Audit events.
             if !state.pendingEvents.isEmpty {
@@ -692,7 +714,9 @@ public actor GatewayEngine {
     /// Creates a new single-use invitation. The person must explicitly start this.
     public func startPairing() throws -> ActiveInvitation {
         if case .unavailable(let reason) = pairingAvailability() { throw PairingError.unavailable(reason) }
-        guard let identity, let address = invitationAddress else { throw PairingError.unavailable("The gateway is not listening.") }
+        guard let identity, let address = invitationAddress, let security = transport else {
+            throw PairingError.unavailable("The gateway is not listening.")
+        }
         cancelPairing(reason: "Replaced by a new invitation")
         let now = clock()
         let ttl = settings.clampedInvitationTTL
@@ -701,7 +725,8 @@ public actor GatewayEngine {
         let env = settings.centralMode.wireEnvironment
         let payload = InvitationPayload(invitationId: id, secret: secret, gatewayFingerprint: identity.fingerprint,
                                         gatewayName: settings.gatewayName, address: address,
-                                        expiresAt: Int64(now.addingTimeInterval(ttl).timeIntervalSince1970), environment: env)
+                                        expiresAt: Int64(now.addingTimeInterval(ttl).timeIntervalSince1970), environment: env,
+                                        transport: security.invitationTransport, tlsFingerprint: security.tlsFingerprint)
         let code: String
         do { code = try InvitationCode.encode(payload) } catch { throw PairingError.unavailable("Could not create an invitation: \(error)") }
         let expires = Date(timeIntervalSince1970: TimeInterval(payload.expiresAt))
@@ -709,7 +734,8 @@ public actor GatewayEngine {
                                                   status: .active, usedAt: nil, usedByFingerprint: nil, failedProofs: 0,
                                                   environment: env, address: address))
         if state.invitations.count > 200 { state.invitations.removeFirst(state.invitations.count - 200) }
-        activeInvitation = ActiveInvitation(id: id, code: code, createdAt: now, expiresAt: expires, address: address, environment: env)
+        activeInvitation = ActiveInvitation(id: id, code: code, createdAt: now, expiresAt: expires, address: address, environment: env,
+                                            tlsFingerprint: security.tlsFingerprint)
         pendingSecrets[id] = secret
         persist()
         log(.pairing, .info, "Pairing started", "Invitation \(id) for \(address), valid until \(Self.timeFormatter.string(from: expires)). Single use.")
@@ -962,7 +988,9 @@ public actor GatewayEngine {
             requestId: requestId, state: .received, checkCode: check, gatewayName: settings.gatewayName,
             gatewayFingerprint: identity.fingerprint, gatewayPublicKey: identity.publicKeyBase64url, environment: env,
             forwardedCapabilities: forward, refusedCapabilities: refused,
-            message: "Request received. It is being forwarded to \(decider). Possession of an invitation is not approval.")
+            message: "Request received. It is being forwarded to \(decider). Possession of an invitation is not approval.",
+            transport: transport?.invitationTransport ?? InvitationTransport.cleartextLoopbackDevelopment,
+            tlsFingerprint: transport?.tlsFingerprint)
         return respond(202, response, nonce: n)
     }
 
@@ -1003,7 +1031,8 @@ public actor GatewayEngine {
         }
         return respond(200, EnrollmentStatusResponseBody(requestId: record.id, state: record.state, centralState: central,
                                                          reason: record.decisionReason, deviceId: deviceId, grant: grant,
-                                                         environment: record.environment, message: message), nonce: n)
+                                                         environment: record.environment, message: message,
+                                                         tlsFingerprint: transport?.tlsFingerprint), nonce: n)
     }
 
     func handleHeartbeat(_ request: HTTPRequest, auth: SignedEnvelope.RequestAuth, input: RequestSigningInput) -> HTTPResponse {
@@ -1043,6 +1072,13 @@ public actor GatewayEngine {
         guard device.environment == settings.centralMode.wireEnvironment else {
             return error(403, "environment_inactive", "This device was enrolled in the \(device.environment) environment, which this gateway is not using now.", nonce: n)
         }
+        // Fail closed: admission must have been confirmed with central recently (revocation reaches Origin
+        // through that check). After a restart or a long outage, devices wait for the next successful sync.
+        guard let confirmed = lastAdmissionSync[device.environment],
+              now.timeIntervalSince(confirmed) <= TimeInterval(settings.admissionMaxAge) else {
+            return error(503, OriginErrorCode.admissionUnverified,
+                         "Origin has not confirmed this device's admission with central in the last \(settings.admissionMaxAge / 60) minutes. Retry shortly.", nonce: n)
+        }
         guard device.grant.allows(Capability.presence) else {
             return error(403, OriginErrorCode.capabilityNotGranted, "connection.presence was not granted.", nonce: n)
         }
@@ -1064,6 +1100,7 @@ public actor GatewayEngine {
         knownConnection[device.id] = .connected
         persist()
         return respond(200, HeartbeatResponseBody(state: "connected", grant: state.devices[i].grant,
-                                                   intervalSeconds: settings.heartbeatIntervalSeconds, serverTime: now), nonce: n)
+                                                   intervalSeconds: settings.heartbeatIntervalSeconds, serverTime: now,
+                                                   tlsFingerprint: transport?.tlsFingerprint), nonce: n)
     }
 }

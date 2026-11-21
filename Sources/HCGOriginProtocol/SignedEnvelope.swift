@@ -13,8 +13,20 @@ public enum OriginHeader {
     public static let publicKey = "x-hcg-public-key"
 }
 
+/// Versions of the HCG Origin contract. Connector, Origin and central HCG must agree on all three.
+public enum HCGOriginContract {
+    /// The contract revision documented in docs/PROTOCOL.md and docs/CENTRAL-HANDOFF.md.
+    public static let revision = "hcg-origin-contract/2"
+    /// Connector ↔ Origin.
+    public static let connectorProtocol = OriginProtocol.version
+    /// Origin ↔ central HCG (PROPOSED; returned as `apiVersion` by `GET health`).
+    public static let centralAPI = "hcg-origin-central/1"
+    /// Capability catalogue version.
+    public static let capabilityCatalogue = "hcg-origin-capabilities/1"
+}
+
 public enum OriginProtocol {
-    public static let version = "hcg-origin/1"
+    public static let version = "hcg-origin/2"
     /// Accepted clock difference between signer and verifier.
     public static let maxClockSkew: TimeInterval = 120
     /// How long a used nonce is remembered (must exceed 2 × maxClockSkew).

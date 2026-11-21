@@ -36,6 +36,7 @@ public struct ActiveInvitation: Equatable, Sendable {
     public var expiresAt: Date
     public var address: String
     public var environment: String
+    public var tlsFingerprint: String?
 }
 
 public enum PairingAvailability: Equatable, Sendable {
@@ -55,6 +56,7 @@ public struct GatewaySnapshot: Equatable, Sendable {
     public var gatewayFingerprint: String
     public var proposedGatewayId: String
     public var keyStorage: String
+    public var transport: TransportSecurity?
     public var secretStorage: String
     public var listener: ListenerState
     public var central: CentralStatus

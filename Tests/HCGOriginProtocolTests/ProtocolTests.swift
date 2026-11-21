@@ -8,13 +8,14 @@ final class ProtocolTests: XCTestCase {
     func payload(expiresIn: TimeInterval = 300) -> InvitationPayload {
         InvitationPayload(invitationId: "inv_test", secret: InvitationCode.newSecret(), gatewayFingerprint: gateway.fingerprint,
                           gatewayName: "Test Gateway", address: "127.0.0.1:47700",
-                          expiresAt: Int64(Date().addingTimeInterval(expiresIn).timeIntervalSince1970), environment: "development")
+                          expiresAt: Int64(Date().addingTimeInterval(expiresIn).timeIntervalSince1970), environment: "development",
+                          transport: InvitationTransport.tls13Pinned, tlsFingerprint: SoftwareSigner().fingerprint)
     }
 
     func testInvitationRoundTripAndWhitespaceTolerance() throws {
         let p = payload()
         let code = try InvitationCode.encode(p)
-        XCTAssertTrue(code.hasPrefix("hcgo1-"))
+        XCTAssertTrue(code.hasPrefix("hcgo2-"))
         let wrapped = String(code.prefix(20)) + "\n  " + String(code.dropFirst(20))
         XCTAssertEqual(try InvitationCode.decode(wrapped), p)
         XCTAssertNoThrow(try InvitationCode.validate(p))
@@ -22,7 +23,8 @@ final class ProtocolTests: XCTestCase {
 
     func testInvitationRejectsWrongPrefixCorruptionAndExpiry() throws {
         XCTAssertThrowsError(try InvitationCode.decode("hcg1-abc")) { XCTAssertEqual($0 as? InvitationError, .wrongPrefix) }
-        XCTAssertThrowsError(try InvitationCode.decode("hcgo1-!!!")) { XCTAssertEqual($0 as? InvitationError, .corrupted) }
+        XCTAssertThrowsError(try InvitationCode.decode("hcgo2-!!!")) { XCTAssertEqual($0 as? InvitationError, .corrupted) }
+        XCTAssertThrowsError(try InvitationCode.decode("hcgo1-eyJ2IjoxfQ")) { XCTAssertEqual($0 as? InvitationError, .wrongPrefix) }
         var bad = payload()
         bad.gatewayFingerprint = "abc"
         XCTAssertThrowsError(try InvitationCode.decode(try InvitationCode.encode(bad))) { XCTAssertEqual($0 as? InvitationError, .incomplete) }
@@ -103,5 +105,76 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(device.fingerprint, Encoding.sha256Hex(device.publicKeyDER))
         XCTAssertTrue(KeyFingerprint.isValid(device.fingerprint))
         XCTAssertEqual(KeyFingerprint.short(device.fingerprint).count, 19)
+    }
+
+    // MARK: hcg-origin/2 transport rules
+
+    func testInvitationTransportRules() throws {
+        // TLS requires a valid pin.
+        var noPin = payload()
+        noPin.tlsFingerprint = nil
+        XCTAssertThrowsError(try InvitationCode.decode(try InvitationCode.encode(noPin))) { XCTAssertEqual($0 as? InvitationError, .incomplete) }
+        // Cleartext is accepted only for 127.0.0.1 in development, without a pin.
+        var clear = payload()
+        clear.transport = InvitationTransport.cleartextLoopbackDevelopment
+        clear.tlsFingerprint = nil
+        XCTAssertNoThrow(try InvitationCode.decode(try InvitationCode.encode(clear)))
+        var lan = clear
+        lan.address = "192.168.1.20:47700"
+        XCTAssertThrowsError(try InvitationCode.decode(try InvitationCode.encode(lan))) { XCTAssertEqual($0 as? InvitationError, .insecureTransport) }
+        var prod = clear
+        prod.environment = "production"
+        XCTAssertThrowsError(try InvitationCode.decode(try InvitationCode.encode(prod))) { XCTAssertEqual($0 as? InvitationError, .insecureTransport) }
+        var unknown = payload()
+        unknown.transport = "tls12"
+        XCTAssertThrowsError(try InvitationCode.decode(try InvitationCode.encode(unknown))) { XCTAssertEqual($0 as? InvitationError, .insecureTransport) }
+    }
+
+    func testSelfSignedCertificateIsValidAndCarriesThePinnedKey() throws {
+        let key = SoftwareSigner()
+        let der = try X509SelfSigned.make(spkiDER: key.publicKeyDER, commonName: "HCG Origin TLS (test)",
+                                          serial: Encoding.randomBytes(16), notBefore: Date(), notAfter: Date().addingTimeInterval(86_400)) {
+            try key.sign($0)
+        }
+        // Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm, signatureValue }
+        let outer = try XCTUnwrap(DER.children(of: der))
+        XCTAssertEqual(outer.count, 3)
+        let tbs = outer[0]
+        let sigBits = outer[2]
+        XCTAssertEqual(sigBits.first, 0x03)
+        let signature = Data(try XCTUnwrap(DER.content(of: sigBits)).dropFirst()) // drop "unused bits" byte
+        XCTAssertTrue(SignatureVerifier.verify(signatureDER: signature, message: tbs, publicKeyDER: key.publicKeyDER),
+                      "the TBSCertificate must be signed by the certified key")
+        XCTAssertNotNil(der.range(of: key.publicKeyDER), "the certificate must contain the pinned SPKI")
+    }
+}
+
+/// Minimal DER reader for the tests.
+enum DER {
+    static func header(_ d: Data, at i: Int) -> (contentStart: Int, length: Int)? {
+        guard i + 1 < d.count else { return nil }
+        let b = d[d.startIndex + i + 1]
+        if b < 0x80 { return (i + 2, Int(b)) }
+        let n = Int(b & 0x7f)
+        guard n > 0, n <= 4, i + 2 + n <= d.count else { return nil }
+        var len = 0
+        for k in 0..<n { len = (len << 8) | Int(d[d.startIndex + i + 2 + k]) }
+        return (i + 2 + n, len)
+    }
+    static func content(of tlv: Data) -> Data? {
+        guard let h = header(tlv, at: 0) else { return nil }
+        return Data(tlv[(tlv.startIndex + h.contentStart)..<(tlv.startIndex + h.contentStart + h.length)])
+    }
+    static func children(of tlv: Data) -> [Data]? {
+        guard let body = content(of: tlv) else { return nil }
+        var out: [Data] = []
+        var i = 0
+        while i < body.count {
+            guard let h = header(body, at: i) else { return nil }
+            let end = h.contentStart + h.length
+            out.append(Data(body[(body.startIndex + i)..<(body.startIndex + end)]))
+            i = end
+        }
+        return out
     }
 }

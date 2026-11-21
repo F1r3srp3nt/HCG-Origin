@@ -143,6 +143,11 @@ struct ConnectionPanel: View {
     var body: some View {
         Panel("Connection") {
             FieldRow(label: "Status", value: status)
+            FieldRow(label: "Transport", value: TransportText.summary(s.transport))
+            if case .tls13Pinned(let fp, let storage)? = s.transport {
+                FieldRow(label: "TLS key fingerprint", value: fp, mono: true, selectable: true)
+                FieldRow(label: "TLS key storage", value: storage)
+            }
             HStack {
                 Text("Port").foregroundStyle(HCG.textDim).frame(width: 150, alignment: .leading)
                 TextField("47700", text: $port).textFieldStyle(.roundedBorder).frame(width: 80)
@@ -155,7 +160,7 @@ struct ConnectionPanel: View {
             Toggle(isOn: Binding(get: { s.settings.allowLocalNetwork }, set: { v in model.update { $0.allowLocalNetwork = v } })) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Accept devices on the local network")
-                    Text("Off: only clients on this Mac can reach Origin. On: devices on your private network can send signed requests; macOS may ask for Local Network permission.")
+                    Text("Off: only clients on this Mac can reach Origin. On: devices on your private network connect over TLS 1.3 to this gateway's pinned certificate and still need a valid invitation and ERP approval. macOS may ask for Local Network permission.")
                         .font(.caption).foregroundStyle(HCG.textDim).fixedSize(horizontal: false, vertical: true)
                 }
             }

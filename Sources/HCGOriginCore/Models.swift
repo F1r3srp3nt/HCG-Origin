@@ -32,6 +32,11 @@ public struct OriginSettings: Codable, Equatable, Sendable {
     public var centralSyncSeconds: Int
     /// Undecided requests expire locally after this long.
     public var requestTTLSeconds: Int
+    /// Devices may connect only while admission was confirmed with central within this many seconds.
+    /// Optional so that older settings files still load; nil means the default (15 minutes).
+    public var admissionMaxAgeSeconds: Int?
+
+    public var admissionMaxAge: Int { admissionMaxAgeSeconds ?? 15 * 60 }
 
     public static func defaults(hostName: String) -> OriginSettings {
         OriginSettings(gatewayName: hostName.isEmpty ? "HCG Origin" : hostName,
@@ -39,7 +44,7 @@ public struct OriginSettings: Codable, Equatable, Sendable {
                        developmentServiceURL: "http://127.0.0.1:47800/api/public/origin/v1",
                        invitationTTLSeconds: Int(InvitationCode.defaultTTL), keepRunningInBackground: false,
                        heartbeatIntervalSeconds: 10, disconnectAfterSeconds: 35, centralSyncSeconds: 4,
-                       requestTTLSeconds: 30 * 60)
+                       requestTTLSeconds: 30 * 60, admissionMaxAgeSeconds: nil)
     }
 
     public var clampedInvitationTTL: TimeInterval {

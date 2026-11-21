@@ -22,7 +22,8 @@ final class Harness {
     let engine: GatewayEngine
     let secrets = MemorySecretStore()
 
-    init(mode: CentralMode = .development, production: ProductionConfiguration = ProductionConfiguration()) throws {
+    init(mode: CentralMode = .development, production: ProductionConfiguration = ProductionConfiguration(),
+         transport: ConnectorTransportFactory = .cleartextLoopback) throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("hcg-origin-tests-\(UUID().uuidString)")
         dev = DevCentralService(port: 0)
         try dev.start()
@@ -34,7 +35,7 @@ final class Harness {
         try JSONFileStore(directory: dir).save(settings, to: "settings.json")
         let c = clock
         engine = GatewayEngine(dataDirectory: dir, secrets: secrets, production: production, hostName: "Test Mac",
-                               preferSecureEnclave: false, clock: { c.now() })
+                               preferSecureEnclave: false, transport: transport, clock: { c.now() })
     }
 
     func start(signIn: Bool = true) async throws {
@@ -139,6 +140,9 @@ final class EnrollmentFlowTests: XCTestCase {
         XCTAssertEqual(afterRestart.gatewayFingerprint, snap.gatewayFingerprint, "identity must survive restarts")
         guard case .listening(let address, _) = afterRestart.listener else { return XCTFail("not listening") }
         client.profile.gateway?.address = address // listener used an ephemeral test port
+        // Fail closed: no connection until admission is confirmed with central after the restart.
+        await assertGatewayError(OriginErrorCode.admissionUnverified) { _ = try await client.heartbeat() }
+        await restarted.syncNow()
         _ = try await client.heartbeat()
         await restarted.syncNow()
 
@@ -192,6 +196,7 @@ final class EnrollmentFlowTests: XCTestCase {
         let body = Wire.encode(EnrollRequestBody(invitationId: payload.invitationId, gatewayFingerprint: payload.gatewayFingerprint,
                                                  device: client.descriptor, requestedCapabilities: [Capability.presence]))
         let req = try client.prepare(path: OriginPath.enroll, body: body, address: payload.address,
+                                     transport: payload.transport, tlsFingerprint: payload.tlsFingerprint,
                                      invitation: (payload.invitationId, payload.secret), now: h.clock.now())
         let resp = try await client.send(req, pinnedFingerprint: payload.gatewayFingerprint)
         XCTAssertEqual(resp.status, 410)
@@ -210,7 +215,9 @@ final class EnrollmentFlowTests: XCTestCase {
         let client = try h.client()
         let body = Wire.encode(EnrollRequestBody(invitationId: payload.invitationId, gatewayFingerprint: payload.gatewayFingerprint,
                                                  device: client.descriptor, requestedCapabilities: [Capability.presence]))
-        let req = try client.prepare(path: OriginPath.enroll, body: body, address: payload.address, invitation: (payload.invitationId, payload.secret))
+        let req = try client.prepare(path: OriginPath.enroll, body: body, address: payload.address,
+                                     transport: payload.transport, tlsFingerprint: payload.tlsFingerprint,
+                                     invitation: (payload.invitationId, payload.secret))
         let first = try await client.send(req, pinnedFingerprint: payload.gatewayFingerprint)
         XCTAssertEqual(first.status, 202)
         // Exact replay of a captured request.
@@ -407,5 +414,36 @@ final class EnrollmentFlowTests: XCTestCase {
             guard case .rejected(422, let code, _) = e else { return XCTFail("\(e)") }
             XCTAssertEqual(code, CentralErrorCode.deviceSignatureInvalid)
         }
+    }
+
+    func testLocalNetworkRequiresEncryption() async throws {
+        let h = try Harness()
+        defer { Task { await h.tearDown() } }
+        try await h.start()
+        await h.engine.updateSettings { $0.allowLocalNetwork = true }
+        let snap = await h.snapshot()
+        guard case .failed(let reason) = snap.listener else { return XCTFail("cleartext must never listen beyond this Mac: \(snap.listener)") }
+        XCTAssertTrue(reason.contains("encrypted transport"), reason)
+        if case .available = snap.pairing { XCTFail("pairing must be unavailable without encryption") }
+    }
+
+    func testAdmissionFreshnessFailsClosed() async throws {
+        let h = try Harness()
+        defer { Task { await h.tearDown() } }
+        try await h.start()
+        await h.engine.updateSettings { $0.admissionMaxAgeSeconds = 60 }
+        let client = try h.client()
+        let r = try await client.enroll(code: try await h.pair(), capabilities: [Capability.presence])
+        try h.dev.approve(enrollmentId: try await h.centralEnrollmentId(for: r.requestId))
+        await h.engine.syncNow()
+        _ = try await client.status()
+        _ = try await client.heartbeat()
+        h.dev.setOutage(true)
+        h.clock.advance(61)
+        await h.engine.syncNow() // fails: central down, admission not re-confirmed
+        await assertGatewayError(OriginErrorCode.admissionUnverified) { _ = try await client.heartbeat() }
+        h.dev.setOutage(false)
+        await h.engine.syncNow()
+        _ = try await client.heartbeat()
     }
 }

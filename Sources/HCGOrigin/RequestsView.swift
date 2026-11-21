@@ -244,6 +244,7 @@ struct PairingSheet: View {
                             }
                         }
                         FieldRow(label: "Gateway address", value: inv.address, mono: true)
+                        FieldRow(label: "Encryption", value: inv.tlsFingerprint.map { "TLS 1.3 · pinned key \(KeyFingerprint.short($0))" } ?? "None (development, this Mac only)")
                         FieldRow(label: "Environment", value: inv.environment == "development" ? "Development (local service)" : "Production")
                         Text("INVITATION CODE").font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(HCG.textFaint)
                         Text(inv.code)

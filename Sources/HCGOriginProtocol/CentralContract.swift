@@ -54,7 +54,13 @@ public struct GatewayRegistrationRequest: Codable, Equatable, Sendable {
     public var name: String
     public var platform: String
     public var originVersion: String
-    public init(gatewayPublicKey: String, proposedGatewayId: String, name: String, platform: String, originVersion: String) {
+    /// Connector protocol the gateway speaks, e.g. "hcg-origin/2".
+    public var protocolVersion: String
+    /// Fingerprint of the gateway's TLS transport key (informational; Connectors pin it from the invitation).
+    public var transportFingerprint: String?
+    public init(gatewayPublicKey: String, proposedGatewayId: String, name: String, platform: String, originVersion: String,
+                protocolVersion: String = OriginProtocol.version, transportFingerprint: String?) {
+        self.protocolVersion = protocolVersion; self.transportFingerprint = transportFingerprint
         self.gatewayPublicKey = gatewayPublicKey; self.proposedGatewayId = proposedGatewayId
         self.name = name; self.platform = platform; self.originVersion = originVersion
     }
@@ -77,6 +83,8 @@ public struct GatewayRegistration: Codable, Equatable, Sendable {
 /// The Connector's original signed request, forwarded unchanged so central can
 /// verify the device signature itself instead of trusting Origin.
 public struct ForwardedDeviceRequest: Codable, Equatable, Sendable {
+    /// The Connector protocol of the original request, e.g. "hcg-origin/2".
+    public var protocolVersion: String
     public var method: String
     public var path: String
     public var timestamp: Int64
@@ -84,7 +92,9 @@ public struct ForwardedDeviceRequest: Codable, Equatable, Sendable {
     public var keyFingerprint: String
     public var body: String // base64url of the exact body bytes
     public var signature: String // base64url DER
-    public init(method: String, path: String, timestamp: Int64, nonce: String, keyFingerprint: String, body: String, signature: String) {
+    public init(protocolVersion: String = OriginProtocol.version, method: String, path: String, timestamp: Int64, nonce: String,
+                keyFingerprint: String, body: String, signature: String) {
+        self.protocolVersion = protocolVersion
         self.method = method; self.path = path; self.timestamp = timestamp; self.nonce = nonce
         self.keyFingerprint = keyFingerprint; self.body = body; self.signature = signature
     }

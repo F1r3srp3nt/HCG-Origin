@@ -95,10 +95,16 @@ public struct EnrollResponseBody: Codable, Equatable, Sendable {
     public var forwardedCapabilities: [String]
     public var refusedCapabilities: [CapabilityRefusal]
     public var message: String
+    /// `InvitationTransport` value of this connection.
+    public var transport: String
+    /// The TLS key this response was served over, signed into the body by the gateway identity key
+    /// (binds the encrypted channel to the gateway identity). Nil only for cleartext development.
+    public var tlsFingerprint: String?
 
     public init(requestId: String, state: EnrollmentState, checkCode: String, gatewayName: String, gatewayFingerprint: String,
                 gatewayPublicKey: String, environment: String, forwardedCapabilities: [String],
-                refusedCapabilities: [CapabilityRefusal], message: String) {
+                refusedCapabilities: [CapabilityRefusal], message: String, transport: String, tlsFingerprint: String?) {
+        self.transport = transport; self.tlsFingerprint = tlsFingerprint
         self.requestId = requestId; self.state = state; self.checkCode = checkCode; self.gatewayName = gatewayName
         self.gatewayFingerprint = gatewayFingerprint; self.gatewayPublicKey = gatewayPublicKey; self.environment = environment
         self.forwardedCapabilities = forwardedCapabilities; self.refusedCapabilities = refusedCapabilities; self.message = message
@@ -140,9 +146,11 @@ public struct EnrollmentStatusResponseBody: Codable, Equatable, Sendable {
     public var grant: DeviceGrant?
     public var environment: String
     public var message: String
+    public var tlsFingerprint: String?
 
     public init(requestId: String, state: EnrollmentState, centralState: String?, reason: String?, deviceId: String?,
-                grant: DeviceGrant?, environment: String, message: String) {
+                grant: DeviceGrant?, environment: String, message: String, tlsFingerprint: String?) {
+        self.tlsFingerprint = tlsFingerprint
         self.requestId = requestId; self.state = state; self.centralState = centralState; self.reason = reason
         self.deviceId = deviceId; self.grant = grant; self.environment = environment; self.message = message
     }
@@ -174,8 +182,10 @@ public struct HeartbeatResponseBody: Codable, Equatable, Sendable {
     public var grant: DeviceGrant
     public var intervalSeconds: Int
     public var serverTime: Date
+    public var tlsFingerprint: String?
 
-    public init(state: String, grant: DeviceGrant, intervalSeconds: Int, serverTime: Date) {
+    public init(state: String, grant: DeviceGrant, intervalSeconds: Int, serverTime: Date, tlsFingerprint: String?) {
+        self.tlsFingerprint = tlsFingerprint
         self.state = state; self.grant = grant; self.intervalSeconds = intervalSeconds; self.serverTime = serverTime
     }
 }
@@ -219,4 +229,9 @@ public enum OriginErrorCode {
     public static let capabilityNotGranted = "capability_not_granted"
     public static let notFound = "not_found"
     public static let pairingUnavailable = "pairing_unavailable"
+    /// Origin has not confirmed the device's admission with central recently enough (fail closed).
+    public static let admissionUnverified = "admission_unverified"
+    public static let localNetworkDisabled = "local_network_disabled"
+    public static let addressNotAllowed = "address_not_allowed"
+    public static let environmentInactive = "environment_inactive"
 }

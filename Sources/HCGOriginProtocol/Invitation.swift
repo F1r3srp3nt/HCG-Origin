@@ -6,6 +6,15 @@ import Foundation
 /// request. It never approves anything: approval is decided centrally (ERP).
 /// Origin stores only a hash of `secret`; the Connector never sends the secret back,
 /// it proves possession with an HMAC over each enrollment request.
+/// How the Connector must connect to the gateway named in an invitation.
+public enum InvitationTransport {
+    /// HTTPS with TLS 1.3 only; the server certificate's SPKI SHA-256 must equal `tfp`.
+    public static let tls13Pinned = "tls13-pinned"
+    /// Cleartext HTTP to 127.0.0.1, development only (Linux test harness). Never issued by the macOS app,
+    /// and a Connector must refuse it for any non-loopback address or the production environment.
+    public static let cleartextLoopbackDevelopment = "cleartext-loopback-dev"
+}
+
 public struct InvitationPayload: Codable, Equatable, Sendable {
     public var version: Int
     public var invitationId: String
@@ -20,15 +29,23 @@ public struct InvitationPayload: Codable, Equatable, Sendable {
     public var expiresAt: Int64
     /// "development" or "production". A Connector must show this to the person.
     public var environment: String
+    /// `InvitationTransport` value.
+    public var transport: String
+    /// Pinned TLS certificate key fingerprint (SHA-256 of SPKI, hex). Required for `tls13-pinned`.
+    public var tlsFingerprint: String?
 
     enum CodingKeys: String, CodingKey {
         case version = "v", invitationId = "id", secret = "s", gatewayFingerprint = "gfp"
         case gatewayName = "gn", address = "addr", expiresAt = "exp", environment = "env"
+        case transport = "t", tlsFingerprint = "tfp"
     }
 
     public init(invitationId: String, secret: String, gatewayFingerprint: String, gatewayName: String,
-                address: String, expiresAt: Int64, environment: String) {
-        self.version = 1
+                address: String, expiresAt: Int64, environment: String,
+                transport: String, tlsFingerprint: String?) {
+        self.version = 2
+        self.transport = transport
+        self.tlsFingerprint = tlsFingerprint
         self.invitationId = invitationId
         self.secret = secret
         self.gatewayFingerprint = gatewayFingerprint
@@ -40,7 +57,7 @@ public struct InvitationPayload: Codable, Equatable, Sendable {
 }
 
 public enum InvitationError: Error, Equatable, CustomStringConvertible {
-    case wrongPrefix, corrupted, unsupportedVersion(Int), incomplete, expired
+    case wrongPrefix, corrupted, unsupportedVersion(Int), incomplete, expired, insecureTransport
 
     public var description: String {
         switch self {
@@ -49,12 +66,13 @@ public enum InvitationError: Error, Equatable, CustomStringConvertible {
         case .unsupportedVersion(let v): return "Unsupported invitation version \(v)."
         case .incomplete: return "The invitation code is incomplete."
         case .expired: return "The invitation has expired. Ask for a new one in HCG Origin."
+        case .insecureTransport: return "The invitation does not require an encrypted, pinned connection for this address. Refusing it."
         }
     }
 }
 
 public enum InvitationCode {
-    public static let prefix = "hcgo1-"
+    public static let prefix = "hcgo2-"
     public static let defaultTTL: TimeInterval = 5 * 60
     public static let maximumTTL: TimeInterval = 15 * 60
     public static let minimumTTL: TimeInterval = 60
@@ -80,12 +98,23 @@ public enum InvitationCode {
               let payload = try? JSONDecoder().decode(InvitationPayload.self, from: data) else {
             throw InvitationError.corrupted
         }
-        guard payload.version == 1 else { throw InvitationError.unsupportedVersion(payload.version) }
+        guard payload.version == 2 else { throw InvitationError.unsupportedVersion(payload.version) }
         guard !payload.invitationId.isEmpty, !payload.address.isEmpty,
               Encoding.fromBase64url(payload.secret)?.count == 32,
               KeyFingerprint.isValid(payload.gatewayFingerprint),
               ["development", "production"].contains(payload.environment) else {
             throw InvitationError.incomplete
+        }
+        switch payload.transport {
+        case InvitationTransport.tls13Pinned:
+            guard let tfp = payload.tlsFingerprint, KeyFingerprint.isValid(tfp) else { throw InvitationError.incomplete }
+        case InvitationTransport.cleartextLoopbackDevelopment:
+            let host = payload.address.split(separator: ":").first.map(String.init) ?? ""
+            guard host.hasPrefix("127."), payload.environment == "development", payload.tlsFingerprint == nil else {
+                throw InvitationError.insecureTransport
+            }
+        default:
+            throw InvitationError.insecureTransport
         }
         return payload
     }

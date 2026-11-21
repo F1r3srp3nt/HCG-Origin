@@ -128,6 +128,9 @@ final class UIAutomation {
         o["pairing"] = { if case .unavailable(let r) = s.pairing { return "unavailable: \(r)" }; return "available" }()
         o["central"] = "\(s.central.reachability)"
         o["mode"] = s.settings.centralMode.rawValue
+        o["transport"] = s.transport?.invitationTransport ?? ""
+        o["tlsFingerprint"] = s.transport?.tlsFingerprint ?? ""
+        o["listener"] = "\(s.listener)"
         o["account"] = s.account?.email ?? ""
         o["gatewayId"] = s.registration?.gatewayId ?? ""
         o["requests"] = s.requests.map { "\($0.id)=\($0.state.rawValue)/\($0.checkCode)" }.joined(separator: ",")

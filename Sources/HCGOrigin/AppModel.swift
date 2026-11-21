@@ -70,6 +70,7 @@ final class AppModel: ObservableObject {
     init() {
         let production = ProductionConfiguration.fromInfoDictionary(Bundle.main.infoDictionary)
         let store: SecretStore
+        let service = ProcessInfo.processInfo.environment["HCG_ORIGIN_KEYCHAIN_SERVICE"].flatMap { $0.isEmpty ? nil : $0 } ?? "HCG Origin"
         if ProcessInfo.processInfo.environment["HCG_ORIGIN_DEV_FILE_SECRETS"] == "1" {
             store = FileSecretStore(url: OriginPaths.dataDirectory().appendingPathComponent("dev-secrets.json"))
         } else if let service = ProcessInfo.processInfo.environment["HCG_ORIGIN_KEYCHAIN_SERVICE"], !service.isEmpty {
@@ -77,8 +78,11 @@ final class AppModel: ObservableObject {
         } else {
             store = KeychainSecretStore()
         }
+        // Connector traffic always uses TLS 1.3 with the gateway's pinned certificate. There is no
+        // cleartext fallback in the app: if the certificate cannot be prepared, the listener fails.
         engine = GatewayEngine(dataDirectory: OriginPaths.dataDirectory(), secrets: store, production: production,
-                               hostName: Host.current().localizedName ?? "This Mac")
+                               hostName: Host.current().localizedName ?? "This Mac",
+                               transport: .tls(label: GatewayTLSIdentity.label(forService: service)))
         refreshLoginItemStatus()
         let engine = self.engine
         let sink: @Sendable (GatewaySnapshot) -> Void = { [weak self] snap in

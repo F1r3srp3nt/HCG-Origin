@@ -234,7 +234,7 @@ public final class HTTPServer: @unchecked Sendable {
             sem.wait()
             response = box.value ?? HTTPResponse(status: 500)
         case .failure(let failure):
-            response = HTTPResponse.json(failure.status, Data("{\"error\":{\"code\":\"bad_request\",\"message\":\"\(failure.message)\"}}".utf8))
+            response = HTTPWire.errorResponse(status: failure.status, message: failure.message)
         }
         write(response: response, to: client)
     }
@@ -246,75 +246,23 @@ public final class HTTPServer: @unchecked Sendable {
     private func readRequest(client: Int32, remoteAddress: String) -> Result<HTTPRequest, ReadFailure> {
         var data = Data()
         var chunk = [UInt8](repeating: 0, count: 8192)
-        let separator = Data("\r\n\r\n".utf8)
-        var headerEnd: Range<Data.Index>?
-        while headerEnd == nil {
-            let n = recv(client, &chunk, chunk.count, 0)
-            if n <= 0 { return .failure(ReadFailure(status: 400, message: "incomplete request")) }
-            data.append(contentsOf: chunk[0..<n])
-            headerEnd = data.range(of: separator)
-            if headerEnd == nil && data.count > maxHeaderBytes {
-                return .failure(ReadFailure(status: 413, message: "headers too large"))
+        while true {
+            switch HTTPWire.parse(data, maxHeaderBytes: maxHeaderBytes, maxBodyBytes: maxBodyBytes) {
+            case .complete(var request):
+                request.remoteAddress = remoteAddress
+                return .success(request)
+            case .failure(let status, let message):
+                return .failure(ReadFailure(status: status, message: message))
+            case .needMore:
+                let n = recv(client, &chunk, chunk.count, 0)
+                if n <= 0 { return .failure(ReadFailure(status: 400, message: "incomplete request")) }
+                data.append(contentsOf: chunk[0..<n])
             }
         }
-        guard let end = headerEnd,
-              let head = String(data: data[data.startIndex..<end.lowerBound], encoding: .utf8) else {
-            return .failure(ReadFailure(status: 400, message: "malformed headers"))
-        }
-        var lines = head.components(separatedBy: "\r\n")
-        let requestLine = lines.removeFirst().split(separator: " ")
-        guard requestLine.count == 3, requestLine[2].hasPrefix("HTTP/1.") else {
-            return .failure(ReadFailure(status: 400, message: "malformed request line"))
-        }
-        var headers: [String: String] = [:]
-        for line in lines where !line.isEmpty {
-            guard let colon = line.firstIndex(of: ":") else { return .failure(ReadFailure(status: 400, message: "malformed header")) }
-            let name = line[line.startIndex..<colon].trimmingCharacters(in: .whitespaces).lowercased()
-            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-            headers[name] = value
-        }
-        if headers["transfer-encoding"] != nil {
-            return .failure(ReadFailure(status: 400, message: "transfer-encoding is not supported"))
-        }
-        let length = Int(headers["content-length"] ?? "0") ?? -1
-        guard length >= 0 else { return .failure(ReadFailure(status: 400, message: "bad content-length")) }
-        guard length <= maxBodyBytes else { return .failure(ReadFailure(status: 413, message: "body too large")) }
-        var body = Data(data[end.upperBound...])
-        while body.count < length {
-            let n = recv(client, &chunk, min(chunk.count, length - body.count), 0)
-            if n <= 0 { return .failure(ReadFailure(status: 400, message: "incomplete body")) }
-            body.append(contentsOf: chunk[0..<n])
-        }
-        if body.count > length { body = body.prefix(length) }
-
-        let target = String(requestLine[1])
-        var path = target
-        var query: [String: String] = [:]
-        if let q = target.firstIndex(of: "?") {
-            path = String(target[target.startIndex..<q])
-            for pair in target[target.index(after: q)...].split(separator: "&") {
-                let kv = pair.split(separator: "=", maxSplits: 1).map(String.init)
-                let key = kv[0].removingPercentEncoding ?? kv[0]
-                let value = kv.count > 1 ? (kv[1].replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? kv[1]) : ""
-                query[key] = value
-            }
-        }
-        return .success(HTTPRequest(method: String(requestLine[0]).uppercased(), path: path, query: query,
-                                    headers: headers, body: body, remoteAddress: remoteAddress))
     }
 
     private func write(response: HTTPResponse, to client: Int32) {
-        var head = "HTTP/1.1 \(response.status) \(HTTPResponse.reason(response.status))\r\n"
-        var headers = response.headers
-        headers["content-length"] = String(response.body.count)
-        headers["connection"] = "close"
-        headers["cache-control"] = headers["cache-control"] ?? "no-store"
-        for (k, v) in headers.sorted(by: { $0.key < $1.key }) {
-            head += "\(k): \(v.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: ""))\r\n"
-        }
-        head += "\r\n"
-        var out = Data(head.utf8)
-        out.append(response.body)
+        let out = HTTPWire.serialize(response)
         out.withUnsafeBytes { raw in
             guard let base = raw.baseAddress else { return }
             var sent = 0

@@ -51,6 +51,7 @@ public enum CentralError: Error, CustomStringConvertible, Equatable {
     case rejected(status: Int, code: String, message: String)
     case malformed(String)
     case environmentMismatch(expected: String, actual: String)
+    case unsupportedVersion(expected: String, actual: String)
 
     public var description: String {
         switch self {
@@ -62,6 +63,8 @@ public enum CentralError: Error, CustomStringConvertible, Equatable {
         case .malformed(let m): return "Central service sent an unexpected response: \(m)"
         case .environmentMismatch(let e, let a):
             return "The configured central service reports environment '\(a)', but Origin expected '\(e)'. Nothing was sent."
+        case .unsupportedVersion(let e, let a):
+            return "The central service speaks '\(a)', but this Origin requires '\(e)'. Nothing was sent."
         }
     }
 
@@ -135,6 +138,9 @@ public final class HTTPCentralService: CentralService, @unchecked Sendable {
         let h = try await call("GET", CentralPath.health, token: nil, body: nil, as: CentralHealth.self)
         guard h.environment == mode.wireEnvironment else {
             throw CentralError.environmentMismatch(expected: mode.wireEnvironment, actual: h.environment)
+        }
+        guard h.apiVersion == HCGOriginContract.centralAPI else {
+            throw CentralError.unsupportedVersion(expected: HCGOriginContract.centralAPI, actual: h.apiVersion)
         }
         return h
     }

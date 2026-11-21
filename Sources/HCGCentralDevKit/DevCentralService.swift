@@ -253,7 +253,7 @@ public final class DevCentralService: @unchecked Sendable {
         expireLocked()
         let parts = sub.split(separator: "/").map(String.init)
         if parts == ["health"] && request.method == "GET" {
-            return json(200, CentralHealth(service: Self.serviceName, environment: "development", apiVersion: "proposed-1", time: clock()))
+            return json(200, CentralHealth(service: Self.serviceName, environment: "development", apiVersion: HCGOriginContract.centralAPI, time: clock()))
         }
         guard let account = authenticate(request) else {
             return fail(401, CentralErrorCode.unauthorized, "Missing or unknown development session token.")
