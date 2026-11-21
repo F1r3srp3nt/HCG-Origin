@@ -18,7 +18,7 @@ central API `hcg-origin-central/1` PROPOSED, Origin feature keys PROPOSED) · 21
 | Environment | What ran | Result |
 |---|---|---|
 | Linux container | `swift test` — 45 tests incl. listener conflict/recovery/self-test, permissions, session renewal, and the 13-step flow against a **real HCG Server agent** (mock identities) | PASS — [record](verification/linux-hcg-server-integration/) |
-| **CI: GitHub `macos-latest`** (macOS 26.7.2, Apple M1 virtual) | `scripts/verify-on-mac.sh` incl. a port-conflict step against the real app | 0.3.0: see the latest run on PR F1r3srp3nt/HCG-Origin#1. 0.2.0: PASS, [evidence](verification/ci-macos-26.7.2-apple-m1-virtual-v0.2.0/) |
+| **CI: GitHub `macos-latest`** (macOS 26.7.2, Apple M1 virtual) | `scripts/verify-on-mac.sh` incl. a port-conflict step against the real app | **0.3.0: PASS** — run [44943555051](https://github.com/F1r3srp3nt/HCG-Origin/actions/runs/44943555051), commit `33490f0ed4bf`: 50 tests, port conflict named and recovered, self-test OK, full scenario, preservation; [evidence](verification/ci-macos-26.7.2-apple-m1-virtual-v0.3.0/) |
 | CI with HCG Server | — | **NOT RUN**: CI cannot check out the HCG Server repository; `--hcg-server` is for your Mac |
 | **Your MacBook Pro M4 Max, macOS 27.0.1** | `diagnose-gateway.sh`, then `verify-on-mac.sh --expect-macos 27.0.1 --expect-chip "M4 Max" [--hcg-server …]` | **NOT RUN** — no Mac attached to this session |
 
