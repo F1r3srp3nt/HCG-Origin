@@ -22,6 +22,19 @@ The build is signed ad hoc. A zip downloaded from GitHub carries the quarantine 
 refuse to open it until you allow it: right-click the app → **Open**, or
 System Settings → Privacy & Security → **Open Anyway**.
 
+## 1a. First: find out why your current copy says “Gateway listener failed”
+
+Before installing 0.3.0, while the copy that shows the failure is still running:
+
+```bash
+./scripts/diagnose-gateway.sh > ~/Desktop/origin-diagnosis.txt
+```
+
+Read-only: it lists running copies of HCG Origin, which process owns the gateway port, whether that port answers
+with Origin's TLS certificate, the Keychain certificate, recent gateway errors and whether that copy has production
+values. It prints a short conclusion. Send the file back if the conclusion is not clear; it contains no tokens.
+[GATEWAY-LISTENER.md](GATEWAY-LISTENER.md) explains each finding and what 0.3.0 does about it.
+
 ## 2. Scripted end-to-end verification on your MacBook Pro (M4 Max, macOS 27.0.1)
 
 Quit HCG Origin first (the script refuses to run while it is open), then:
@@ -57,6 +70,26 @@ To keep the evidence in the repository: `--save-evidence` copies the report and 
 
 macOS may ask once whether Terminal may record the screen (for screenshots); declining only affects screenshots.
 macOS 27.0.1 has not been tested by CI (GitHub runners use macOS 26.7.2); your run is the only evidence for it.
+
+### 2a. Optional: the same run against a real HCG Server agent (Device Link)
+
+Needs Go and a checkout of `F1r3srp3nt/hcg-server` on branch `claude/devicelink-testdevice`:
+
+```bash
+./scripts/verify-on-mac.sh --expect-macos 27.0.1 --expect-chip "M4 Max" --hcg-server ~/src/hcg-server
+```
+
+It builds HCG Server's Device Link fixture (a real agent with **mock** HCG identities, in a temporary folder — your
+own HCG Server data and Keychain items are not touched) and its scriptable test device, connects the app to the
+fixture, creates an invitation in the app, pairs the test device, approves it in the app, checks it comes online,
+checks that a remote action is refused (`action_execution_disabled`), revokes it in the app and checks the device is
+refused (`device_revoked`). Screenshots `14-hcg-server-request` and `15-hcg-server-devices`.
+
+### 2b. Connecting your own HCG Server
+
+In **Account & Settings → HCG Server**: *Connect to HCG Server on This Mac* reads the owner token from HCG Server's
+own Keychain item (macOS asks once whether HCG Origin may read it), or paste the link printed by
+`hcg-agent admin-url`. Only loopback addresses are accepted. Requires the central permission `origin.server.connect`.
 
 ## 3. Manual walk-through
 

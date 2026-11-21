@@ -52,7 +52,7 @@ extension GatewayEngine {
         notify()
     }
 
-    func syncHCGServer(force: Bool = false) async {
+    public func syncHCGServer(force: Bool = false) async {
         guard settings.hcgServer != nil else {
             if serverState.connection != nil { serverState = .empty }
             return

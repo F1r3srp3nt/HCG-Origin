@@ -1,21 +1,31 @@
 # HCG Origin — status
 
-Version **0.2.0** · contract revision `hcg-origin-contract/2` (Connector protocol `hcg-origin/2`,
-central API `hcg-origin-central/1` PROPOSED) · 21 Nov 2026.
+Version **0.3.0** · contract revision `hcg-origin-contract/3` (Connector protocol `hcg-origin/2` unchanged,
+central API `hcg-origin-central/1` PROPOSED, Origin feature keys PROPOSED) · 21 Nov 2026.
+
+## What 0.3.0 adds
+
+| Area | State | Details |
+|---|---|---|
+| “Gateway listener failed” | **Fixed in code; cause on your Mac not observed** (no Mac attached) | Single-instance lock, port owner named, `.waiting` tolerated, automatic retry, *Use a Free Port*, self-test over pinned TLS, diagnostics panel, read-only `scripts/diagnose-gateway.sh`. [GATEWAY-LISTENER.md](GATEWAY-LISTENER.md) |
+| Central feature registration (`hcg.origin`) | **PROPOSED, not applied** | 10 operational feature keys, `origin.actions.approve` disabled; reviewable SQL + proposal in the main-site repo, draft PR F1r3srp3nt/hakmicapitalgroup#1. [CENTRAL-HANDOFF.md §13](CENTRAL-HANDOFF.md) |
+| Central permission enforcement | IMPLEMENTED-DEV | Every sensitive action calls `/check` for its feature; only `allowed:true` allows; fail closed; execution blocked in the build regardless of central answers |
+| HCG Connect production | **Not exercised** — no Origin client exists centrally | Session renewal with refresh tokens, Keychain-only storage, sign-out; production values all empty in this build (5 keys) |
+| HCG Server Device Link | **IMPLEMENTED; verified against a real agent with mock identities** | Connect (loopback owner API), invitations, review with fingerprint confirmation, attributed approval, rejection, inventory, revocation, reachability, audit. [Linux record](verification/linux-hcg-server-integration/) |
 
 ## Evidence, by environment (kept separate)
 
 | Environment | What ran | Result |
 |---|---|---|
-| Linux container + GitHub `ubuntu-latest` | `swift test`: protocol, contract-drift, and end-to-end enrollment tests over loopback (cleartext development transport — Linux has no TLS server) | PASS — 31 tests |
-| **CI: GitHub `macos-latest`** (macOS 26.7.2, Apple M1 virtual, Xcode 26.6) | `scripts/verify-on-mac.sh`: `swift test` incl. real TLS 1.3 tests; release + UI-automation builds; release app via LaunchServices; TLS checks with OpenSSL; full scenario through the real app; preservation and clean-up checks | **PASS** — run [44933222822](https://github.com/F1r3srp3nt/HCG-Origin/actions/runs/44933222822), commit `98b6711dded2`, build 16: 36 tests (incl. 5 real-TLS tests) and every scenario check; [evidence](verification/ci-macos-26.7.2-apple-m1-virtual-v0.2.0/) |
-| **Your MacBook Pro M4 Max, macOS 27.0.1** | `./scripts/verify-on-mac.sh --expect-macos 27.0.1 --expect-chip "M4 Max"` | **NOT RUN** — no Mac was attached to this session; macOS 27 is not available on GitHub runners |
-| Earlier: CI, 0.1.0 (`hcg-origin/1`) | see `docs/verification/ci-macos-26.7.2-apple-m1-virtual-v0.1.0/` | PASS (superseded) |
+| Linux container | `swift test` — 45 tests incl. listener conflict/recovery/self-test, permissions, session renewal, and the 13-step flow against a **real HCG Server agent** (mock identities) | PASS — [record](verification/linux-hcg-server-integration/) |
+| **CI: GitHub `macos-latest`** (macOS 26.7.2, Apple M1 virtual) | `scripts/verify-on-mac.sh` incl. a port-conflict step against the real app | 0.3.0: see the latest run on PR F1r3srp3nt/HCG-Origin#1. 0.2.0: PASS, [evidence](verification/ci-macos-26.7.2-apple-m1-virtual-v0.2.0/) |
+| CI with HCG Server | — | **NOT RUN**: CI cannot check out the HCG Server repository; `--hcg-server` is for your Mac |
+| **Your MacBook Pro M4 Max, macOS 27.0.1** | `diagnose-gateway.sh`, then `verify-on-mac.sh --expect-macos 27.0.1 --expect-chip "M4 Max" [--hcg-server …]` | **NOT RUN** — no Mac attached to this session |
 
-Every enrollment decision in any of these runs came from the **local development service, not HCG**.
-Production HCG verification has not been exercised by anyone: nothing has been issued (see CENTRAL-HANDOFF.md).
+Every enrollment and permission decision in these runs came from the **local development service or HCG Server's
+mock identities, not HCG**. Production HCG verification has not been exercised by anyone.
 
-## Encrypted transport (new in 0.2.0)
+## Encrypted transport (0.2.0)
 
 | Requirement | State |
 |---|---|
@@ -43,13 +53,19 @@ PKCE code present but unavailable · labelled development service and test clien
 
 ## Blockers and remaining work
 
-1. **Production enrollment** — blocked on D-O1…D-O6 (CENTRAL-HANDOFF.md §11 with recommendations): product ID,
-   HCG Connect clients, the central API, ERP workflow, tables, revocation. The development service is not a substitute.
-2. **HCG Connector app** — not found; it must implement PROTOCOL.md §9, including TLS pinning.
-3. **Your Mac** — run the verification above; LAN pairing with a second device; Gatekeeper on a downloaded build;
-   Keychain prompts after rebuilding (one for the session items, one for the TLS key — choose Always Allow).
-4. **TLS key rotation** requires re-pairing in this revision.
-5. **Distribution** — Developer ID signing and notarization not set up.
-6. **Repository visibility** — still public; the request was private (GitHub → Settings).
-7. **Official icon** — derived placeholder.
-8. Command execution stays disabled at this milestone.
+1. **Your Mac** — run `scripts/diagnose-gateway.sh` with the copy that shows the failure (identifies the actual
+   cause), then install 0.3.0 and run the verification. The “production configuration is present” you saw does not
+   match any build from this repository (all production values are empty); the diagnosis prints what your copy has.
+2. **Central registration (Owner)** — apply or adapt `hcg.origin` + the ten features (main-site draft PR); grant
+   yourself the features to test; issue the development HCG Connect client (D-O2). Origin has invented none of these.
+3. **HCG Connect acceptance** (C2, C11–C13) — needs the development client; until then sign-in, renewal and `/check`
+   are verified only against the development service.
+4. **`/check` without an organisation** (D-O4) — personal accounts have no `org_id`; central must decide.
+5. **Central API `hcg-origin-central/1`** (D-O5) and ERP workflow — unchanged from revision 2.
+6. **Origin as a Device Link installation** of HCG Server — needs HCG Server to allow `hcg.origin` and the Origin
+   client; today Origin manages the agent on the same Mac through its owner API.
+7. **HCG Connector app** — not found; PROTOCOL.md §9 is its checklist.
+8. **Distribution** — Developer ID signing and notarization not set up.
+9. **Repository visibility** — still public; the request was private (GitHub → Settings).
+10. Command execution and remote actions stay disabled (`origin.actions.approve` disabled centrally and in the build;
+    HCG Server's action registry empty).

@@ -1,10 +1,10 @@
-# HCG Origin × main HCG (HCG Connect + ERP) — integration handoff, contract revision 2
+# HCG Origin × main HCG (HCG Connect + ERP) — integration handoff, contract revision 3
 
 **From:** HCG Origin (`F1r3srp3nt/HCG-Origin`, branch `claude/wonderful-galileo-ovhpbi`), 21 Nov 2026.
 **For:** the main HCG / Lovable project (`F1r3srp3nt/hakmicapitalgroup`).
-**Supersedes:** the 18 Nov handoff (revision 1).
+**Supersedes:** revision 2 (21 Nov, same day) and revision 1 (18 Nov). **What changed in revision 3:** §13.
 No secrets, tokens, client IDs or credentials are in this document or in Origin's build.
-When sent on its own, this file travels with `hcg-origin-contract-2.json` (the machine-readable contract) and
+When sent on its own, this file travels with `hcg-origin-contract-3.json` (the machine-readable contract) and
 Origin's `docs/PROTOCOL.md` is available in the Origin repository.
 
 Labels (as in `docs/hcg-server/device-link-handoff.md`): **SOURCE-VERIFIED** (read in main-site source/docs) ·
@@ -15,7 +15,7 @@ implemented centrally) · **BLOCKED** (needs a decision below) · **RECOMMENDED*
 
 | Contract part | Version | Between | Status |
 |---|---|---|---|
-| Contract revision | `hcg-origin-contract/2` | everyone | this document + PROTOCOL.md + `contract/hcg-origin-contract-2.json` |
+| Contract revision | `hcg-origin-contract/3` | everyone | this document + PROTOCOL.md + `contract/hcg-origin-contract-3.json` |
 | Central API | `hcg-origin-central/1` | Origin ↔ main HCG | **PROPOSED** — to be implemented by main HCG |
 | Connector protocol | `hcg-origin/2` | Connector ↔ Origin | implemented in Origin; main HCG verifies one message of it (§4.3) |
 | Capability catalogue | `hcg-origin-capabilities/1` | everyone | implemented |
@@ -23,7 +23,7 @@ implemented centrally) · **BLOCKED** (needs a decision below) · **RECOMMENDED*
 Versioning rules: `GET health` must return `apiVersion: "hcg-origin-central/1"` exactly — Origin refuses any other
 value and sends nothing. Additive optional fields are allowed within a version; anything else needs
 `hcg-origin-central/2` and a new contract revision. The machine-readable file
-[`contract/hcg-origin-contract-2.json`](contract/hcg-origin-contract-2.json) lists every path, field set, state,
+[`contract/hcg-origin-contract-3.json`](contract/hcg-origin-contract-3.json) lists every path, field set, state,
 error code and event type; Origin's tests fail if Origin drifts from it.
 
 ## 1. Summary
@@ -74,7 +74,7 @@ Origin's side (implemented, unused until configured): discovery from the configu
 S256 required, system browser via `ASWebAuthenticationSession`, `state` check, code exchange, tokens in the login
 Keychain, sign-out clears local tokens only (no revocation endpoint is advertised — SOURCE-VERIFIED).
 
-**Send back to Origin** (goes into the app's `Info.plist`; all four are empty today):
+**Send back to Origin** (goes into the app's `Info.plist`; all five are empty today):
 
 | Key | Value |
 |---|---|
@@ -82,6 +82,7 @@ Keychain, sign-out clears local tokens only (no revocation endpoint is advertise
 | `HCGConnectRedirectURI` | the registered callback, exactly — Origin then adds the matching URL scheme |
 | `HCGConnectIssuer` | canonical direct issuer from discovery (Origin copies it from configuration, never hardcodes it in code) |
 | `HCGCentralOriginAPIBase` | https base URL of `hcg-origin-central/1` once deployed (RECOMMENDED: `https://<site>/api/public/origin/v1`) |
+| `HCGEcosystemAPIBase` | https base of the existing ecosystem API (`…/api/public/ecosystem/v1`) — Origin calls `POST check` there for its feature keys (§13.1). New in revision 3 |
 
 ## 4. Central API `hcg-origin-central/1` — PROPOSED
 
@@ -229,7 +230,7 @@ Record PASS/FAIL/NOT RUN with date, Origin version + commit, and account — nev
 
 | # | Decision | **Recommended** | Why | Alternative |
 |---|---|---|---|---|
-| **D-O1** | Product for Origin | **Register `hcg.origin`** as its own product (status `planned` until C1–C10 pass), features `origin.gateway.register`, `origin.enrollment.submit`, `origin.devices.read` | Origin has its own app, client, consent screen and lifecycle; HCG Server Device Link (`hcg.server`) governs host agents and storage. Separate products keep licences and revocation independent. Device capabilities stay in Origin's own allow-list, not as ecosystem features | Place Origin under `hcg.server` as more `devicelink.*` features |
+| **D-O1** | Product for Origin | **Register `hcg.origin`** as its own product (status `planned` until C1–C10 pass) with the ten operational features in §13.1 (`origin.actions.approve` disabled) | Origin has its own app, client, consent screen and lifecycle; HCG Server Device Link (`hcg.server`) governs host agents and storage. Separate products keep licences and revocation independent. Device capabilities stay in Origin's own allow-list, not as ecosystem features | Place Origin under `hcg.server` as more `devicelink.*` features |
 | **D-O2** | Bundle IDs and callbacks | **Approve §3 values**; issue a production and a separate development public PKCE client; keep both `configured_untested` | Follows the existing `<bundle-id>://auth/callback` convention (Nexus, Sentinel) and the "one client per app and environment" rule | Different scheme, e.g. `hcg-origin://auth/callback` (LifeOS style) |
 | **D-O3** | Who approves a device | **The gateway owner** (the account that registered the gateway). Owner/Founder may **revoke** any device for security, but not approve on someone's behalf | Admission is about the owner's own machine and device; keeps approval with the person who can compare the check code | Org admins of the owning organisation (after D-O4) |
 | **D-O4** | Account or organisation scope | **Account scope now**, nullable `org_id` for later; whether an account may own gateways is an explicit per-account grant managed in ERP App Access, returned as `mayOwnGateways` | Ordinary customers have no organisation today, so `/check` cannot evaluate them; an explicit grant avoids "membership alone" access | Wait for the shared customer-organisation work (Store D4) and use org scope from the start |
@@ -238,7 +239,74 @@ Record PASS/FAIL/NOT RUN with date, Origin version + commit, and account — nev
 
 ## 12. What happens on Origin's side once values are issued
 
-1. Put the four issued values into the production build's `Info.plist`; add the URL scheme for the callback.
+1. Put the five issued values into the production build's `Info.plist`; add the URL scheme for the callback.
 2. Build, then run the acceptance tests in §10 with a real account and a real Connector (or the development test client
    pointed at the real gateway, clearly recorded as such).
 3. Only then is production pairing available in Origin. Until then the app shows exactly which values are missing.
+
+## 13. Revision 3 additions (21 Nov 2026)
+
+### 13.1 Origin feature keys — PROPOSED (not registered, not approved)
+
+Prepared for the Owner as an unapplied, reviewable change in the main-site repository:
+`docs/hcg-origin/registration-proposal.md` and `docs/hcg-origin/registry-review.sql` (branch
+`claude/hcg-origin-registration`, draft PR F1r3srp3nt/hakmicapitalgroup#1). Product `hcg.origin`, `app_type desktop`,
+platforms `macos`, lifecycle `development` / release `planned`. All features `access_class = operational`, not
+licensable: **only an explicit, revocable per-member grant allows** — membership or a licence alone never does.
+
+| Feature key | Purpose | Enabled at registration |
+|---|---|---|
+| `origin.app.access` | View Origin's state while signed in | yes |
+| `origin.gateway.manage` | Port, network exposure, start/stop, local block | yes |
+| `origin.devices.enroll` | Create invitations (Connector and HCG Server Device Link) | yes |
+| `origin.requests.review` | Approve / reject connection requests | yes |
+| `origin.devices.read` | Device inventory | yes |
+| `origin.gateway.diagnostics` | Diagnostics (no secrets) | yes |
+| `origin.server.connect` | Connect Origin to HCG Server | yes |
+| `origin.audit.read` | Origin and gateway audit events | yes |
+| `origin.settings.admin` | Central environment, background operation | yes |
+| `origin.actions.approve` | Remote action approval — **execution-related** | **no (disabled)** |
+
+How Origin uses them (IMPLEMENTED-DEV, against the development service's `POST /api/public/ecosystem/v1/check`):
+`POST {HCGEcosystemAPIBase}/check {org_id, product_id:"hcg.origin", feature_key}` with the signed-in person's
+token. Only `allowed: true` allows. Allows are cached ≤ 60 s, denials ≤ 10 s; a 401 clears the cache. A central
+outage refuses everything except access-reducing actions (reject, revoke, block). Every refusal is logged in Origin's
+Activity with the central reason.
+
+**Founder and execution.** `eco_check_access` checks `enabled` before the Founder short-circuit, so a disabled
+feature is refused for the Founder too (SOURCE-VERIFIED, migration 0083). Origin additionally refuses
+execution-related features in this build (`ExecutionPolicy.enabledInThisBuild = false`) without asking central; both
+must change before any remote action can be approved, and the target device's owner still approves locally.
+
+**Organisation for `/check` (D-O4 follow-up).** `/check` requires an `org_id`. Personal accounts have none today, so
+Origin sends the zero UUID and expects central to evaluate the account-level grant, or to return
+`user_not_permitted`. Central must decide how a personal owner's Origin grants are evaluated before production.
+
+### 13.2 HCG Connect session lifecycle — IMPLEMENTED-DEV, not exercised against HCG Connect
+
+Origin stores one session item (access token, refresh token, expiry, token endpoint, client ID) in the login
+Keychain — never in files or logs. It renews with `grant_type=refresh_token` before expiry (serialized; one renewal
+at a time); a refused renewal (400/401) ends the session and asks the person to sign in again. Sign-out deletes the
+item and the permission cache; no revocation endpoint is advertised, so tokens expire naturally (SOURCE-VERIFIED).
+Acceptance against the real HCG Connect requires the development client (§3, D-O2).
+
+### 13.3 HCG Server Device Link — Origin as the owner's console (IMPLEMENTED, mock identities)
+
+Origin connects to the **local** HCG Server agent's owner API (loopback only, admin token from HCG Server's own
+Keychain item or an `hcg-agent admin-url` link) and shows its Device Link pairings and installations next to
+Connector devices. Origin does **not** add a second identity, role or licence authority: HCG Server verifies the
+device's signature, HCG token and ERP access (`devicelink.*`); Origin adds the owner's explicit, attributed approval,
+gated by `origin.requests.review`. Events `gateway.server.*` (contract revision 3) are sent to central with the other
+gateway events. Verified against a real agent with mock identities (`docs/verification/linux-hcg-server-integration/`).
+
+Not done and needed for "Origin registers the Mac as an authorized device of HCG Server": HCG Server's allow-list of
+apps that may pair would have to include `hcg.origin`, which needs the Origin HCG Connect client (D-O2) and a
+decision in HCG Server's own handoff. Until then Origin uses the owner API on the same Mac only.
+
+### 13.4 Acceptance tests added
+
+| # | Test | Expected |
+|---|---|---|
+| C11 | `/check` for each Origin feature with and without a grant | granted → `allowed:true`; ungranted → `user_not_permitted`; `origin.actions.approve` → `feature_unavailable`, also for the Founder |
+| C12 | Grant withdrawn in ERP while Origin runs | Next approval in Origin refused within ≤ 60 s |
+| C13 | Access token expires | Origin renews with the refresh token without asking; refused renewal → sign in again |

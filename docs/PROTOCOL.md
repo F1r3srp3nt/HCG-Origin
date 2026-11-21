@@ -1,8 +1,11 @@
 # HCG Origin Connector protocol — `hcg-origin/2`
 
-Part of **contract revision `hcg-origin-contract/2`**. The same revision is used by
+Part of **contract revision `hcg-origin-contract/3`**. The same revision is used by
 [CENTRAL-HANDOFF.md](CENTRAL-HANDOFF.md) (Origin ↔ main HCG). Machine-readable values:
-[contract/hcg-origin-contract-2.json](contract/hcg-origin-contract-2.json) — a test fails if the code drifts from it.
+[contract/hcg-origin-contract-3.json](contract/hcg-origin-contract-3.json) — a test fails if the code drifts from it.
+Revision 3 does **not** change the Connector wire protocol (`hcg-origin/2` is unchanged); it adds Origin's central
+feature keys, the `gateway.server.*` audit events and the HCG Server Device Link owner integration
+(CENTRAL-HANDOFF.md §13).
 
 | Contract part | Version | Between | Status |
 |---|---|---|---|
@@ -49,7 +52,7 @@ involved, and there is **no fallback**: a mismatching key aborts the handshake b
   accepted only for `127.x` addresses in the `development` environment; the macOS app never issues it and a
   Connector must refuse it otherwise.
 * Rotating the TLS key requires re-pairing in this revision (devices keep their enrollment; the new pin comes from
-  a new invitation). A signed rotation notice is a candidate for revision 3.
+  a new invitation). A signed rotation notice is a candidate for a later revision.
 
 ## 3. Identities
 
