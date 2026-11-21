@@ -15,6 +15,8 @@ public final class TLSHTTPServer: ConnectorServer, @unchecked Sendable {
     public var maxHeaderBytes = 16 * 1024
     public var readTimeoutSeconds = 10
     public var maxConcurrentConnections = 64
+    /// Diagnostics: called (on a background queue) when a connection fails, e.g. a TLS handshake error.
+    public var onConnectionFailure: (@Sendable (_ remote: String, _ reason: String) -> Void)?
 
     private let identity: SecIdentity
     private let handler: HTTPServer.Handler
@@ -114,9 +116,15 @@ public final class TLSHTTPServer: ConnectorServer, @unchecked Sendable {
             guard let self else { return }
             self.lock.lock(); self.active -= 1; self.lock.unlock()
         }
+        let report = onConnectionFailure
         c.stateUpdateHandler = { state in
             switch state {
-            case .failed: c.cancel()
+            case .failed(let e):
+                report?(remote, "\(e)")
+                c.cancel()
+            case .waiting(let e):
+                report?(remote, "waiting: \(e)")
+                c.cancel()
             case .cancelled: finished.run()
             default: break
             }

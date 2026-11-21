@@ -89,6 +89,9 @@ final class UIAutomation {
                 let inv = try await model.engine.startPairing()
                 model.showPairing = true
                 write("invitation.txt", raw: inv.code)
+            case "cancelPairing":
+                await model.engine.cancelPairing()
+                model.showPairing = false
             case "closeSheet":
                 model.showPairing = false
             case "selectFirstRequest":

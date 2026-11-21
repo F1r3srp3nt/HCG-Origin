@@ -46,10 +46,31 @@ public struct ConnectorTransportFactory: Sendable {
         ConnectorTransportFactory { port, loopbackOnly, handler in
             let identity = try GatewayTLSIdentity.loadOrCreate(label: label)
             let server = TLSHTTPServer(identity: identity.identity, port: port, loopbackOnly: loopbackOnly, handler: handler)
+            server.onConnectionFailure = { remote, reason in
+                OriginLog.error("TLS connection from \(remote) failed: \(reason)")
+                TransportDiagnostics.shared.record(remote: remote, reason: reason)
+            }
             return (server, .tls13Pinned(fingerprint: identity.fingerprint, keyStorage: "P-256 key in the macOS login Keychain (\(label))"))
         }
     }
     #endif
+}
+
+/// Recent transport failures (TLS handshake errors), surfaced in Activity by the engine.
+public final class TransportDiagnostics: @unchecked Sendable {
+    public static let shared = TransportDiagnostics()
+    private let lock = NSLock()
+    private var pending: [(remote: String, reason: String)] = []
+    public func record(remote: String, reason: String) {
+        lock.lock(); defer { lock.unlock() }
+        if pending.count < 50 { pending.append((remote, reason)) }
+    }
+    public func drain() -> [(remote: String, reason: String)] {
+        lock.lock(); defer { lock.unlock() }
+        let out = pending
+        pending.removeAll()
+        return out
+    }
 }
 
 public enum TransportError: Error, CustomStringConvertible, Equatable {

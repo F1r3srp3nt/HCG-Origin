@@ -771,6 +771,9 @@ public actor GatewayEngine {
     public func tick() async {
         let now = clock()
         var changed = false
+        for failure in TransportDiagnostics.shared.drain() {
+            securityLog("tls-\(failure.remote)", "Encrypted connection failed", "From \(failure.remote): \(failure.reason)")
+        }
         for i in state.invitations.indices where state.invitations[i].status == .active && state.invitations[i].expiresAt <= now {
             state.invitations[i].status = .expired
             pendingSecrets[state.invitations[i].id] = nil

@@ -118,7 +118,7 @@ public struct CentralEnrollmentSubmission: Codable, Equatable, Sendable {
     }
 }
 
-public enum CentralEnrollmentState: String, Codable, Sendable {
+public enum CentralEnrollmentState: String, Codable, Sendable, CaseIterable {
     case pendingReview = "pending_review"
     case approved
     case rejected
@@ -156,7 +156,16 @@ public struct CentralEnrollmentRecord: Codable, Equatable, Sendable {
     }
 }
 
-public enum CentralDeviceStatus: String, Codable, Sendable { case active, revoked }
+public enum CentralDeviceStatus: String, Codable, Sendable, CaseIterable { case active, revoked }
+
+/// Audit event types a gateway reports (`POST gateways/{id}/events`).
+public enum GatewayEventType {
+    public static let all: [String] = [
+        "gateway.device.connected", "gateway.device.reconnected", "gateway.device.disconnected",
+        "gateway.device.revocation_enforced", "gateway.device.blocked_locally", "gateway.device.unblocked_locally",
+        "gateway.enrollment.expired_locally",
+    ]
+}
 
 public struct CentralDeviceRecord: Codable, Equatable, Sendable {
     public var deviceId: String
@@ -210,4 +219,9 @@ public enum CentralErrorCode {
     public static let serviceUnavailable = "service_unavailable"
     public static let notFound = "not_found"
     public static let invalidInput = "invalid_input"
+
+    public static let all: [String] = [
+        unauthorized, accountNotPermitted, gatewayNotRegistered, gatewaySignatureInvalid, deviceSignatureInvalid,
+        duplicateEnrollment, serviceUnavailable, notFound, invalidInput,
+    ]
 }

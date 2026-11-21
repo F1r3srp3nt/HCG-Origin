@@ -198,7 +198,9 @@ public struct ErrorBody: Codable, Equatable, Sendable {
     }
     public var error: Detail
     public var requestId: String?
-    public var protocolVersion: String
+    /// Set by Origin. Optional when decoding so that main HCG's existing envelope
+    /// `{"error":{"code","message"},"api_version":"v1"}` is understood too.
+    public var protocolVersion: String?
 
     public init(code: String, message: String, requestId: String? = nil) {
         self.error = Detail(code: code, message: message)
@@ -234,4 +236,11 @@ public enum OriginErrorCode {
     public static let localNetworkDisabled = "local_network_disabled"
     public static let addressNotAllowed = "address_not_allowed"
     public static let environmentInactive = "environment_inactive"
+
+    public static let all: [String] = [
+        badRequest, unauthenticated, staleRequest, replayedRequest, wrongGateway, invitationUnknown, invitationExpired,
+        invitationUsed, invitationCancelled, invalidInvitationProof, invalidSignature, alreadyEnrolled, enrollmentPending,
+        unknownRequest, unknownDevice, deviceRevoked, deviceBlocked, capabilityNotGranted, notFound, pairingUnavailable,
+        admissionUnverified, localNetworkDisabled, addressNotAllowed, environmentInactive,
+    ]
 }

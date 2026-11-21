@@ -1,71 +1,180 @@
 #!/usr/bin/env bash
-# End-to-end verification of HCG Origin on a Mac (also what CI runs on macos-latest).
+# End-to-end verification of HCG Origin on a Mac. The same script runs on GitHub Actions
+# (macos-latest) and on your own Mac; results are kept apart by environment.
 #
-#   ./scripts/verify-on-mac.sh            build, test, and run the full enrollment scenario
-#   ./scripts/verify-on-mac.sh --skip-build   reuse build/ from a previous run
+#   ./scripts/verify-on-mac.sh                       build, test and run the full scenario
+#   ./scripts/verify-on-mac.sh --skip-build          reuse build/ from a previous run
+#   ./scripts/verify-on-mac.sh --expect-macos 27.0.1 --expect-chip "M4 Max"
+#                                                    also record whether this is the expected machine
+#   ./scripts/verify-on-mac.sh --save-evidence       copy the report and screenshots into docs/verification/
 #
-# What it does, against the REAL app and the LOCAL DEVELOPMENT SERVICE (not HCG):
-#   1. swift test (protocol + engine end-to-end tests)
-#   2. builds the release app and a UI-automation build of the same commit
-#   3. launches the release app through LaunchServices (as Finder does) and checks it starts
-#   4. drives the automation build like a person: production state, development sign-in,
-#      Start Pairing, a Connector test client enrolls, approval, connection, rejection,
-#      expired invitation, duplicate enrollment, central outage, disconnect/reconnect,
-#      revocation — capturing screenshots of the actual window at each step
+# Against the REAL app and the LOCAL DEVELOPMENT SERVICE (not HCG):
+#   swift test · release + UI-automation builds of one commit · release app launched through
+#   LaunchServices · encrypted transport checks (TLS 1.3 handshake, pinned key, TLS 1.2 refused,
+#   cleartext refused, system trust refuses the self-signed certificate, wrong pin refused) · pairing,
+#   approval, connection, rejection, expiry, duplicate, outage, disconnect/reconnect, revocation ·
+#   no secrets in logs · your normal data and Keychain items unchanged.
 #
-# Isolation: a temporary data folder, a separate Keychain service name (removed afterwards),
-# a separate development-service port. Your normal HCG Origin data and Keychain items are not touched.
-# Results: build/verification/ (report.md, screenshots/, logs/).
+# Isolation: temporary data folders, separate Keychain names and TLS certificate labels (all removed
+# afterwards and checked), separate ports (47711, 47712, 47811 — not Origin's 47700 or the development
+# service's 47800), a temporary test-client profile. The script refuses to run while your normal
+# HCG Origin is open, and it stops only the copies it started.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-SKIP_BUILD=0
-[[ "${1:-}" == "--skip-build" ]] && SKIP_BUILD=1
-fail() { echo "FAIL: $*" >&2; echo "- FAIL: $*" >> "$REPORT"; exit 1; }
+SKIP_BUILD=0; SAVE=0; EXPECT_OS=""; EXPECT_CHIP=""; ALLOW_RUNNING=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-build) SKIP_BUILD=1 ;;
+    --save-evidence) SAVE=1 ;;
+    --expect-macos) EXPECT_OS="$2"; shift ;;
+    --expect-chip) EXPECT_CHIP="$2"; shift ;;
+    --allow-running-origin) ALLOW_RUNNING=1 ;;
+    *) echo "unknown option $1"; exit 2 ;;
+  esac
+  shift
+done
 [[ "$(uname)" == "Darwin" ]] || { echo "verify-on-mac.sh must run on macOS"; exit 1; }
 
-V="$ROOT/build/verification"
-rm -rf "$V"; mkdir -p "$V/screenshots" "$V/logs"
+# ---------- environment (kept separate: CI vs your own Mac) ----------
+OS_VER="$(sw_vers -productVersion)"; OS_BUILD="$(sw_vers -buildVersion)"
+CHIP="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown)"
+MODEL="$(sysctl -n hw.model 2>/dev/null || echo unknown)"
+MEM_GB=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then CLASS="ci"; else CLASS="personal"; fi
+SLUG="$(echo "$CHIP" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g')"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+LABEL="$CLASS-macos-$OS_VER-$SLUG${GITHUB_RUN_ID:+-run$GITHUB_RUN_ID}-$STAMP"
+V="$ROOT/build/verification/$LABEL"
+mkdir -p "$V/screenshots" "$V/logs"
+ln -sfn "$LABEL" "$ROOT/build/verification/latest"
 REPORT="$V/report.md"
+with_timeout() { local t="$1"; shift; perl -e 'alarm shift; exec @ARGV' "$t" "$@"; }
+diagnose() {
+  set +e
+  local d="$V/logs/diagnostics"; mkdir -p "$d"
+  cp "$DATA/activity.jsonl" "$d/origin-activity.jsonl" 2>/dev/null
+  cp "$RDATA/activity.jsonl" "$d/release-activity.jsonl" 2>/dev/null
+  log show --last 5m --style compact --predicate 'process == "HCGOrigin" OR subsystem == "com.hakmicapitalgroup.hcgorigin"' > "$d/unified-log-hcgorigin.txt" 2>&1
+  log show --last 5m --style compact --predicate 'process == "securityd" OR process == "SecurityAgent"' 2>/dev/null | tail -300 > "$d/unified-log-security.txt"
+  lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -E "4771|4781|COMMAND" > "$d/listening.txt"
+  (echo | with_timeout 10 openssl s_client -connect "127.0.0.1:$GW_PORT" -tls1_3 -brief) > "$d/openssl-probe.txt" 2>&1
+  set -e
+}
+fail() { echo "FAIL: $*" >&2; echo "- FAIL: $*" >> "$REPORT"; diagnose 2>/dev/null || true; exit 1; }
+step() { echo; echo "== $*"; echo "" >> "$REPORT"; echo "### $*" >> "$REPORT"; }
+ok() { echo "   ok: $*"; echo "- PASS: $*" >> "$REPORT"; }
+note() { echo "   note: $*"; echo "- NOTE: $*" >> "$REPORT"; }
+
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hcg-origin-verify.XXXXXX")"
-DATA="$WORK/data"; AUTO="$WORK/automation"; CLIENTS="$WORK/clients"
-mkdir -p "$DATA" "$AUTO" "$CLIENTS"
-DEV_PORT="${HCG_VERIFY_DEV_PORT:-47811}"
-GW_PORT="${HCG_VERIFY_GATEWAY_PORT:-47711}"
-KC_SERVICE="HCG Origin verification $(date +%s)"
-APP_PID=""; DEV_PID=""
+DATA="$WORK/data"; AUTO="$WORK/automation"; CLIENTS="$WORK/clients"; RDATA="$WORK/release-data"
+mkdir -p "$DATA" "$AUTO" "$CLIENTS" "$RDATA"
+DEV_PORT=47811; GW_PORT=47711; RELEASE_PORT=47712
+RUN_TAG="hcg-origin-verify-$STAMP-$$"
+KC_SERVICE="HCG Origin verification $STAMP"
+KC_SERVICES=("$KC_SERVICE" "$KC_SERVICE release")
+APP_PID=""; DEV_PID=""; CLEANED=0
 
 cleanup() {
+  [[ $CLEANED == 1 ]] && return 0
+  CLEANED=1
   [[ -n "$APP_PID" ]] && kill "$APP_PID" 2>/dev/null || true
   [[ -n "$DEV_PID" ]] && kill "$DEV_PID" 2>/dev/null || true
-  pkill -f "$WORK" 2>/dev/null || true
-  for svc in "$KC_SERVICE" "$KC_SERVICE release"; do
+  pkill -f -- "--verification-run $RUN_TAG" 2>/dev/null || true
+  sleep 1
+  for svc in "${KC_SERVICES[@]}"; do
     for item in gateway-signing-key.p256 gateway-signing-key.secure-enclave session-token.development session-token.production; do
       security delete-generic-password -s "$svc" -a "$item" >/dev/null 2>&1 || true
     done
+    for _ in 1 2 3; do security delete-identity -c "HCG Origin TLS ($svc)" >/dev/null 2>&1 || break; done
+    for _ in 1 2 3; do security delete-certificate -c "HCG Origin TLS ($svc)" >/dev/null 2>&1 || break; done
   done
   rm -rf "$WORK"
 }
 trap cleanup EXIT
 
-step() { echo; echo "== $*"; echo "" >> "$REPORT"; echo "### $*" >> "$REPORT"; }
-ok() { echo "   ok: $*"; echo "- PASS: $*" >> "$REPORT"; }
+NORMAL_DATA="$HOME/Library/Application Support/HCG Origin"
+NORMAL_TC="$HOME/Library/Application Support/HCG Connector Test Client"
+NORMAL_DEV="$HOME/Library/Application Support/HCG Origin Development Service"
+# Fingerprint of everything the script must not change. Hashes and attributes only — never secret values.
+preservation_snapshot() {
+  for d in "$NORMAL_DATA" "$NORMAL_TC" "$NORMAL_DEV"; do
+    if [[ -d "$d" ]]; then
+      (cd "$d" && find . -type f -print0 | sort -z | xargs -0 shasum -a 256 2>/dev/null) | sed "s|^|$(basename "$d"): |"
+    else
+      echo "$(basename "$d"): absent"
+    fi
+  done
+  for item in gateway-signing-key.p256 gateway-signing-key.secure-enclave session-token.development session-token.production; do
+    if out=$(security find-generic-password -s "HCG Origin" -a "$item" 2>/dev/null); then
+      echo "keychain HCG Origin/$item: present $(echo "$out" | grep -E '"(mdat|cdat)"' | shasum -a 256 | cut -c1-16)"
+    else
+      echo "keychain HCG Origin/$item: absent"
+    fi
+  done
+  if out=$(security find-certificate -a -c "HCG Origin TLS (HCG Origin)" -Z 2>/dev/null) && [[ -n "$out" ]]; then
+    echo "keychain TLS certificate HCG Origin TLS (HCG Origin): $(echo "$out" | grep -E 'SHA-256 hash' | tr -d ' ' | shasum -a 256 | cut -c1-16)"
+  else
+    echo "keychain TLS certificate HCG Origin TLS (HCG Origin): absent"
+  fi
+}
+leftovers() {
+  security find-certificate -a -c "HCG Origin TLS (HCG Origin verification" 2>/dev/null | grep -c '"labl"' || true
+  security find-certificate -a -c "HCG Origin TEST" 2>/dev/null | grep -c '"labl"' || true
+}
 
 {
   echo "# HCG Origin — Mac verification report"
   echo
-  echo "Date: $(date -u +%Y-%m-%dT%H:%M:%SZ) · $(sw_vers -productName) $(sw_vers -productVersion) · $(uname -m) · $(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo cpu?)"
-  echo "Commit: $(git rev-parse --short=12 HEAD)$( [[ -n "$(git status --porcelain --untracked-files=no)" ]] && echo ' (dirty)')"
-  echo "CI: ${CI:-no} ${GITHUB_RUN_ID:+(GitHub Actions run $GITHUB_RUN_ID)}"
+  if [[ $CLASS == ci ]]; then
+    echo "**Environment: GitHub Actions hosted runner (CI) — NOT your Mac.**"
+  else
+    echo "**Environment: personal Mac (not CI).** Results here are separate from the CI results."
+  fi
+  echo
+  echo "| | |"
+  echo "|---|---|"
+  echo "| macOS | $OS_VER ($OS_BUILD) |"
+  echo "| Chip / model / memory | $CHIP / $MODEL / ${MEM_GB} GB |"
+  echo "| Architecture | $(uname -m) |"
+  echo "| Commit | $(git rev-parse --short=12 HEAD)$( [[ -n "$(git status --porcelain --untracked-files=no)" ]] && echo ' (dirty)') |"
+  echo "| Date (UTC) | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
+  echo "| CI run | ${GITHUB_RUN_ID:-—} |"
   echo
   echo "**Central service in every enrollment below: the LOCAL DEVELOPMENT SERVICE (not HCG, not ERP).**"
   echo "Production HCG verification was not exercised: no HCG Connect client or central API has been issued."
 } > "$REPORT"
+python3 - "$V/environment.json" "$CLASS" "$OS_VER" "$OS_BUILD" "$CHIP" "$MODEL" "$(uname -m)" "$(git rev-parse HEAD)" "${GITHUB_RUN_ID:-}" <<'PY'
+import json, sys
+k = ["class", "macos", "macos_build", "chip", "model", "arch", "commit", "ci_run"]
+json.dump(dict(zip(k, sys.argv[2:])), open(sys.argv[1], "w"), indent=2)
+PY
+
+step "Environment"
+if [[ -n "$EXPECT_OS" ]]; then
+  [[ "$OS_VER" == "$EXPECT_OS" ]] && ok "macOS $OS_VER as expected" || note "expected macOS $EXPECT_OS but this Mac runs $OS_VER ($OS_BUILD)"
+fi
+if [[ -n "$EXPECT_CHIP" ]]; then
+  [[ "$CHIP" == *"$EXPECT_CHIP"* ]] && ok "chip $CHIP as expected" || note "expected chip $EXPECT_CHIP but this Mac reports $CHIP"
+fi
+ok "results folder: build/verification/$LABEL"
+
+step "Your normal HCG Origin data and Keychain (before)"
+if pgrep -x HCGOrigin >/dev/null 2>&1; then
+  if [[ $ALLOW_RUNNING == 1 ]]; then
+    note "a normal HCG Origin is running; the before/after data comparison is skipped because it may change on its own"
+  else
+    fail "HCG Origin is running. Quit it first (its data would change during the run), or pass --allow-running-origin."
+  fi
+fi
+preservation_snapshot > "$V/logs/preservation-before.txt"
+ok "recorded fingerprints of $(wc -l < "$V/logs/preservation-before.txt" | tr -d ' ') normal items (hashes only, no secret values)"
 
 step "Swift tests"
 swift test 2>&1 | tee "$V/logs/swift-test.log" | grep -E "Executed|error|failed" | tail -5
 grep -q "with 0 failures" "$V/logs/swift-test.log" || fail "swift test failed (see logs/swift-test.log)"
 ok "$(grep -E 'Executed [0-9]+ tests' "$V/logs/swift-test.log" | tail -1 | sed 's/^[[:space:]]*//')"
+grep -q "TLSTransportTests" "$V/logs/swift-test.log" && ok "TLS transport tests ran (pinned TLS 1.3 end to end, wrong pin refused, cleartext refused, unpinned trust refused)"
 
 if [[ $SKIP_BUILD == 0 ]]; then
   step "Build"
@@ -81,16 +190,18 @@ ok "release app: $(plutil -extract CFBundleShortVersionString raw "$RELEASE_APP/
 codesign --verify --strict "$RELEASE_APP" && ok "release app signature verifies (ad hoc)"
 
 step "Release app launches through LaunchServices"
-# A separate Keychain service: items one ad-hoc build creates trigger an access prompt in another build.
-open -n "$RELEASE_APP" --env HCG_ORIGIN_DATA_DIR="$WORK/release-data" --env HCG_ORIGIN_KEYCHAIN_SERVICE="$KC_SERVICE release"
-for i in $(seq 1 30); do pgrep -f "$RELEASE_APP/Contents/MacOS/HCGOrigin" >/dev/null && break; sleep 0.5; done
-pgrep -f "$RELEASE_APP/Contents/MacOS/HCGOrigin" >/dev/null || fail "release app did not start"
-sleep 4
-pgrep -f "$RELEASE_APP/Contents/MacOS/HCGOrigin" >/dev/null || fail "release app exited after launch"
+printf '{"listenPort": %s, "gatewayName": "Release launch check", "allowLocalNetwork": false, "centralMode": "production", "developmentServiceURL": "http://127.0.0.1:%s/api/public/origin/v1", "invitationTTLSeconds": 300, "keepRunningInBackground": false, "heartbeatIntervalSeconds": 10, "disconnectAfterSeconds": 35, "centralSyncSeconds": 4, "requestTTLSeconds": 1800}\n' "$RELEASE_PORT" "$DEV_PORT" > "$RDATA/settings.json"
+# Own Keychain name: items one ad-hoc build creates trigger an access prompt in another build.
+open -n "$RELEASE_APP" --env HCG_ORIGIN_DATA_DIR="$RDATA" --env HCG_ORIGIN_KEYCHAIN_SERVICE="$KC_SERVICE release" --args --verification-run "$RUN_TAG"
+for i in $(seq 1 30); do pgrep -f -- "--verification-run $RUN_TAG" >/dev/null && break; sleep 0.5; done
+pgrep -f -- "--verification-run $RUN_TAG" >/dev/null || fail "release app did not start"
+for i in $(seq 1 30); do grep -q "Listening for Connector requests" "$RDATA/activity.jsonl" 2>/dev/null && break; sleep 0.5; done
+pgrep -f -- "--verification-run $RUN_TAG" >/dev/null || fail "release app exited after launch"
 screencapture -x "$V/screenshots/00-release-launch-fullscreen.png" 2>/dev/null || true
-[[ -f "$WORK/release-data/state.json" ]] && ok "release app started, created its state and stayed running" || fail "release app wrote no state"
-grep -q "Gateway started" "$WORK/release-data/activity.jsonl" && ok "release app gateway started"
-pkill -f "$RELEASE_APP/Contents/MacOS/HCGOrigin" || true
+grep -q "Gateway started" "$RDATA/activity.jsonl" && ok "release app started through LaunchServices and its gateway started"
+grep -q "TLS 1.3, pinned certificate" "$RDATA/activity.jsonl" && ok "release app listens with TLS 1.3 and a pinned certificate (no cleartext listener)" \
+  || fail "release app is not listening with TLS: $(tail -3 "$RDATA/activity.jsonl")"
+pkill -f -- "--verification-run $RUN_TAG" || true
 sleep 1
 
 step "Local development service (NOT HCG)"
@@ -155,6 +266,42 @@ wait_for pairing available "pairing available"
 ok "signed in to the development service; gateway ID issued centrally: $(field gatewayId)"
 cmd select overview
 shot 03-overview-development-ready
+
+step "Encrypted transport (hcg-origin/2)"
+[[ "$(field transport)" == "tls13-pinned" ]] || fail "Origin is not offering tls13-pinned (transport=$(field transport))"
+TLSFP="$(field tlsFingerprint)"
+[[ ${#TLSFP} == 64 ]] || fail "no TLS fingerprint"
+HS="$(echo | with_timeout 15 openssl s_client -connect "127.0.0.1:$GW_PORT" -tls1_3 2>&1 || true)"
+if echo "$HS" | grep -q "BEGIN CERTIFICATE"; then
+  SERVED="$(echo "$HS" | openssl x509 -pubkey -noout | openssl pkey -pubin -outform DER | shasum -a 256 | cut -d' ' -f1)"
+  [[ "$SERVED" == "$TLSFP" ]] || fail "served certificate key $SERVED does not match the pinned fingerprint $TLSFP"
+  ok "TLS 1.3 handshake succeeds ($(echo "$HS" | grep -m1 -oE 'TLSv1\.3' || echo TLS 1.3)); the served key matches the fingerprint Origin puts in invitations"
+else
+  fail "TLS 1.3 handshake failed: $(echo "$HS" | tail -3)"
+fi
+HS12="$(echo | with_timeout 15 openssl s_client -connect "127.0.0.1:$GW_PORT" -tls1_2 2>&1 || true)"
+echo "$HS12" | grep -q "BEGIN CERTIFICATE" && fail "TLS 1.2 was accepted" || ok "TLS 1.2 is refused"
+CODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$GW_PORT/origin/v1/enroll" -d '{}' || true)"
+[[ "$CODE" == "000" ]] && ok "cleartext HTTP to the gateway port gets no HTTP answer" || fail "cleartext request answered with HTTP $CODE"
+set +e; curl -s -m 5 -o /dev/null "https://127.0.0.1:$GW_PORT/origin/v1/enroll"; rc=$?; set -e
+[[ $rc == 60 || $rc == 35 ]] && ok "system trust refuses the self-signed gateway certificate (curl exit $rc): there is no accept-any path" || fail "unexpected curl result $rc"
+cmd startPairing
+python3 - "$AUTO/invitation.txt" "$WORK/forged.txt" <<'PY'
+import sys, base64, json, os, hashlib
+code = open(sys.argv[1]).read().strip()
+body = code[len("hcgo2-"):]; body += "=" * (-len(body) % 4)
+p = json.loads(base64.urlsafe_b64decode(body))
+p["tfp"] = hashlib.sha256(os.urandom(32)).hexdigest()  # a certificate the gateway does not have
+out = base64.urlsafe_b64encode(json.dumps(p).encode()).decode().rstrip("=")
+open(sys.argv[2], "w").write("hcgo2-" + out)
+PY
+BEFORE_REQ="$(field requests)"
+set +e; client enroll --code-file "$WORK/forged.txt" --profile wrongpin > "$V/logs/client-wrong-pin.log" 2>&1; rc=$?; set -e
+grep -q "does not match the pinned" "$V/logs/client-wrong-pin.log" && [[ $rc != 0 ]] || fail "wrong pin was not refused (rc=$rc): $(cat "$V/logs/client-wrong-pin.log")"
+cmd state
+[[ "$(field requests)" == "$BEFORE_REQ" && "$(field invitationActive)" == "true" ]] || fail "a request reached Origin over an unpinned channel"
+ok "an invitation with the wrong TLS pin is refused by the client before any request reaches Origin"
+cmd cancelPairing
 
 step "Pairing → enrollment request → approval → connection"
 cmd startPairing
@@ -270,7 +417,7 @@ step "Secrets stay out of logs and state"
 SECRETS=$(python3 - "$AUTO/invitation.txt" <<'PY'
 import sys, base64, json
 code = open(sys.argv[1]).read().strip()
-body = code[len("hcgo1-"):]
+body = code[len("hcgo2-"):]
 body += "=" * (-len(body) % 4)
 p = json.loads(base64.urlsafe_b64decode(body))
 print(p["s"])
@@ -285,6 +432,28 @@ sleep 1
 APP_PID=""
 cp "$DATA/activity.jsonl" "$V/logs/origin-activity.jsonl" 2>/dev/null || true
 admin GET state > "$V/logs/devservice-state.json" 2>/dev/null || true
+
+step "Clean-up and preservation (after)"
+cleanup
+trap - EXIT
+LEFT="$(leftovers | paste -sd+ - | bc)"
+[[ "$LEFT" == "0" ]] && ok "all test Keychain items and TLS certificates were removed" || fail "$LEFT test certificate(s) left in the Keychain"
+preservation_snapshot > "$V/logs/preservation-after.txt"
+if [[ $ALLOW_RUNNING == 1 ]]; then
+  note "preservation comparison skipped (normal HCG Origin was running)"
+elif diff -u "$V/logs/preservation-before.txt" "$V/logs/preservation-after.txt" > "$V/logs/preservation-diff.txt"; then
+  ok "your normal HCG Origin data, test-client and development-service folders and Keychain items are unchanged"
+else
+  fail "normal data or Keychain items changed — see logs/preservation-diff.txt"
+fi
+
+if [[ $SAVE == 1 ]]; then
+  DEST="$ROOT/docs/verification/$CLASS-macos-$OS_VER-$SLUG"
+  rm -rf "$DEST"; mkdir -p "$DEST"
+  cp "$REPORT" "$V/environment.json" "$V/BUILD-INFO.txt" "$DEST/"
+  cp -R "$V/screenshots" "$DEST/"
+  ok "evidence copied to docs/verification/$(basename "$DEST") (review before committing)"
+fi
 echo
 echo "ALL CHECKS PASSED" | tee -a "$REPORT"
 echo "Report: $REPORT"
