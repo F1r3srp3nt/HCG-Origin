@@ -1,3 +1,8 @@
+<img width="2172" height="724" alt="image" src="https://github.com/user-attachments/assets/330c40ca-eb66-439f-bdbe-1dd47d4e4cd9" />
+
+
+
+
 # HCG Origin
 
 **HCG Origin** is the native macOS gateway of the HCG ecosystem. It receives device-connection
